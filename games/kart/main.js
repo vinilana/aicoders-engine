@@ -69,7 +69,7 @@ class KartGame {
 
     this.track = new Track();
     this.world = new CollisionWorld({
-      gravity: new Vec3(0, -22, 0),
+      gravity: new Vec3(0, -16, 0),
       // A kart at 30 m/s covers half a metre per frame at 60fps. Small substeps
       // are what keep the suspension stable and stop a barrier hit exploding.
       maxSubStepTime: 1 / 180,

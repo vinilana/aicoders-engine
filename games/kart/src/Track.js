@@ -35,14 +35,27 @@ const _up = new Vec3(0, 1, 0);
 /**
  * Control points of the circuit, in order. Y carries the elevation change.
  *
- * Laid out as a rough figure of eight with one long straight, a hairpin and a
- * banked sweeper, so that a lap exercises braking, a slow corner and a fast one.
+ * Derived from a radial curve, r(theta), rather than placed by eye. Two failures
+ * of the hand drawn version forced it:
+ *
+ *   - a hairpin of 5.9 m radius, tighter than the 10.5 m half corridor, which
+ *     folded the road ribbon back through itself — the mesh looked shattered and
+ *     was in fact perfectly built;
+ *   - two stretches passing within 4.6 m of each other, so their 21 m wide
+ *     corridors overlapped and z-fought.
+ *
+ * A radial curve with r > 0 is star shaped and therefore cannot self intersect,
+ * which removes the second failure by construction. The parameters were then
+ * searched for the largest minimum radius that still gives the lap some
+ * character. Result: minimum radius 29 m, median 122 m, closest approach between
+ * distant stretches 144 m.
  */
 const CONTROL_POINTS = [
-  [0, 0, -110], [46, 1.5, -100], [74, 3.5, -66], [78, 5.0, -24],
-  [62, 5.5, 8], [30, 4.5, 26], [4, 3.0, 40], [-18, 2.0, 66],
-  [-52, 1.0, 74], [-84, 0.5, 56], [-92, 1.5, 20], [-78, 3.5, -14],
-  [-52, 4.5, -34], [-58, 4.0, -66], [-44, 2.0, -94], [-16, 0.5, -112],
+  [121.7, 4.99, 0.0], [117.2, 4.51, 42.7], [84.7, 3.42, 71.1], [49.4, 2.63, 85.5],
+  [16.9, 2.51, 96.0], [-17.3, 2.71, 98.4], [-55.4, 2.73, 96.0], [-100.2, 2.57, 84.1],
+  [-127.9, 2.70, 46.5], [-117.4, 3.47, 0.0], [-94.2, 4.52, -34.3], [-76.5, 4.95, -64.2],
+  [-51.7, 4.15, -89.5], [-18.5, 2.50, -105.0], [20.1, 1.18, -113.8], [59.9, 1.21, -103.8],
+  [85.8, 2.58, -72.0], [103.5, 4.23, -37.7],
 ];
 
 /**
@@ -98,6 +111,15 @@ class TrackSample {
     this.distance = 0;
     /** @type {number} Signed curvature; drives the banking. */
     this.curvature = 0;
+    /**
+     * @type {number} Menor altura da secao transversal nesta amostra.
+     *
+     * Numa curva inclinada a borda interna fica bem abaixo da linha central —
+     * ate 2,7 m com 23 graus de inclinacao e 7 m de meia-largura. Qualquer coisa
+     * que precise ficar "abaixo da pista" tem que usar isto, e nao a altura do
+     * centro, ou a grama sobe atraves do asfalto justamente nas curvas.
+     */
+    this.minSurfaceY = 0;
   }
 }
 
@@ -151,12 +173,29 @@ export class Track {
       const turn = next.forward.dot(sample.right) - prev.forward.dot(sample.right);
       sample.curvature = turn;
 
-      // Lean the surface into the corner. Clamped so a hairpin does not become
-      // a wall, and smooth because curvature itself is smooth.
-      const bank = Math.max(-0.42, Math.min(0.42, turn * 9));
+      // Inclinacao para dentro da curva, deliberadamente discreta.
+      //
+      // Uma versao anterior chegava a 23 graus, e num corredor de 21 m isso
+      // significa 2,7 m de diferenca de altura entre as bordas: o terreno subia
+      // atraves da borda interna, o kart escorregava para o fundo da curva
+      // parado, e nada disso e como um kartodromo se comporta. Karts correm
+      // praticamente no plano.
+      const bank = Math.max(-0.10, Math.min(0.10, turn * 4));
       sample.normal.set(0, 1, 0).addScaled(sample.right, -bank).normalize();
       // Rebuild right so the frame stays orthonormal after the tilt.
       sample.right.crossVectors(sample.forward, sample.normal).normalize();
+    }
+
+    // Menor altura da secao transversal, incluindo acostamento.
+    const halfSpan = ROAD_HALF_WIDTH + KERB_WIDTH + 2.5;
+    for (let i = 0; i < n; i++) {
+      const sample = this.samples[i];
+      let lowest = sample.position.y;
+      for (let k = -1; k <= 1; k += 2) {
+        const edge = sample.position.y + sample.right.y * halfSpan * k - 0.45;
+        if (edge < lowest) lowest = edge;
+      }
+      sample.minSurfaceY = lowest;
     }
 
     // Arc length, used by the ghost, the props and the lap progress readout.
@@ -281,18 +320,30 @@ export class Track {
     // strip of geometry rather than a texture: it has to be there for the tyre
     // model to notice the surface change, and it is what tells a driver where
     // the track actually ends.
+    // As colunas sao DUPLICADAS nas fronteiras entre faixas. Sem isso a cor
+    // interpola de uma faixa para a outra: com a cor de zebra nos vertices da
+    // borda do asfalto, o degrade atravessa os 14 m inteiros e a pista fica
+    // vermelha ate o meio. Vertice duplicado = cor constante dentro da faixa e
+    // transicao seca entre elas.
     const K = ROAD_HALF_WIDTH + KERB_WIDTH;
-    const across = [-K - 2.5, -K, -ROAD_HALF_WIDTH, 0, ROAD_HALF_WIDTH, K, K + 2.5];
-    const drop = [-0.45, -0.06, 0, 0, 0, -0.06, -0.45];
-    // 0 = asphalt, 1 = kerb, 2 = verge. Drives the vertex colour.
-    const kind = [2, 1, 1, 0, 1, 1, 2];
+    const R = ROAD_HALF_WIDTH;
+    const across = [-K - 2.5, -K, -K, -R, -R, 0, R, R, K, K, K + 2.5];
+    const drop = [-0.45, -0.10, -0.10, 0, 0, 0, 0, 0, -0.10, -0.10, -0.45];
+    // 0 = asfalto, 1 = zebra, 2 = acostamento.
+    const kind = [2, 2, 1, 1, 0, 0, 0, 1, 1, 2, 2];
     const cols = across.length;
 
     const positions = new Float32Array(n * cols * 3);
     const normals = new Float32Array(n * cols * 3);
     const uvs = new Float32Array(n * cols * 2);
     const colors = new Float32Array(n * cols * 4);
-    const indices = new Uint32Array(n * (cols - 1) * 6);
+    // Pares de colunas com largura real: as fronteiras duplicadas tem largura
+    // zero e gerariam quads degenerados, cuja normal e indefinida.
+    const bands = [];
+    for (let c = 0; c < cols - 1; c++) {
+      if (Math.abs(across[c + 1] - across[c]) > 1e-6) bands.push(c);
+    }
+    const indices = new Uint32Array(n * bands.length * 6);
 
     let v = 0;
     for (let i = 0; i < n; i++) {
@@ -331,13 +382,17 @@ export class Track {
     for (let i = 0; i < n; i++) {
       const row = i * cols;
       const nextRow = ((i + 1) % n) * cols;
-      for (let c = 0; c < cols - 1; c++) {
+      for (let k = 0; k < bands.length; k++) {
+        const c = bands[k];
         const a = row + c;
         const b = row + c + 1;
         const d = nextRow + c;
         const e = nextRow + c + 1;
-        indices[t++] = a; indices[t++] = d; indices[t++] = b;
-        indices[t++] = b; indices[t++] = d; indices[t++] = e;
+        // Sentido anti-horario visto DE CIMA. Com `right = forward x up`, a
+        // ordem (a, d, b) produz normal para baixo: a pista existe, e desenhada,
+        // e descartada pelo back-face culling — visivel so por baixo.
+        indices[t++] = a; indices[t++] = b; indices[t++] = d;
+        indices[t++] = b; indices[t++] = e; indices[t++] = d;
       }
     }
 
@@ -471,12 +526,13 @@ export class Track {
         // in pieces — which looks like broken geometry and is not.
         let bestSq = Infinity;
         let bestY = 0;
+        let bestLow = 0;
         for (let i = 0; i < sampleCount; i++) {
           const p = samples[i].position;
           const dx = p.x - wx;
           const dz = p.z - wz;
           const d = dx * dx + dz * dz;
-          if (d < bestSq) { bestSq = d; bestY = p.y; }
+          if (d < bestSq) { bestSq = d; bestY = p.y; bestLow = samples[i].minSurfaceY; }
         }
         const distance = Math.sqrt(bestSq);
 
@@ -492,13 +548,14 @@ export class Track {
         // Beside the road the ground sits just below it, so the shoulder of the
         // road mesh always meets grass and never pokes through it.
         // Altura de base: longe e a paisagem, perto e a pista.
-        const verge = bestY - 1.0;
+        const verge = bestLow - 0.6;
         const base = scenicBase + (verge - scenicBase) * influence;
         // Ondulacao por cima, amortecida junto da pista para o acostamento
         // ficar plano onde o carro pisa.
         let wy = base + detail * (1 - influence * 0.85);
         if (distance < clampRadius) {
-          const ceiling = bestY - 0.25;
+          // Teto pela borda MAIS BAIXA da pista, nao pela linha central.
+          const ceiling = bestLow - 0.25;
           if (wy > ceiling) wy = ceiling;
         }
 

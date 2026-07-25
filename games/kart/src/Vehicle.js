@@ -104,11 +104,20 @@ export class Vehicle {
     this.suspensionMaxForce = 26000;
 
     /** @type {number} Peak drive force per driven wheel, in newtons. */
-    this.engineForce = 5200;
+    this.engineForce = 2100;
     /** @type {number} Brake force per wheel. */
-    this.brakeForce = 6800;
-    /** @type {number} Top speed in m/s (~115 km/h). */
-    this.maxSpeed = 32;
+    this.brakeForce = 3200;
+    /** @type {number} Top speed in m/s (~95 km/h). */
+    this.maxSpeed = 26;
+    /**
+     * @type {number} Aerodynamic drag, in N per (m/s)^2.
+     *
+     * Not decoration: without it the only thing holding the top speed is the
+     * engine force fading out, and a kart pointed downhill accelerates forever.
+     */
+    this.dragCoefficient = 1.15;
+    /** @type {number} Rolling resistance, N per m/s. */
+    this.rollingResistance = 14;
     /** @type {number} Steering angle at rest, in radians. */
     this.maxSteer = 0.56;
     /**
@@ -117,15 +126,26 @@ export class Vehicle {
      */
     this.steerSpeedFalloff = 0.72;
     /** @type {number} Lateral grip coefficient of a loaded tyre. */
-    this.lateralGrip = 5.4;
+    this.lateralGrip = 3.4;
     /** @type {number} Longitudinal grip, used to cap drive and brake force. */
-    this.longitudinalGrip = 4.6;
+    this.longitudinalGrip = 2.4;
     /** @type {number} Grip multiplier when off the racing surface. */
     this.offTrackGrip = 0.45;
     /** @type {number} Extra yaw damping, keeps the kart from spinning forever. */
-    this.yawDamping = 2.6;
+    this.yawDamping = 5.2;
+    /**
+     * @type {number} Aderencia lateral extra da traseira.
+     *
+     * As rodas de tracao gastam parte do circulo de atrito acelerando, e o que
+     * sobra para segurar de lado e menos do que a dianteira tem. Isso e
+     * fisicamente correto e, sem compensacao, torna o kart um piao: medido,
+     * mantendo esterco por 6 s ele rodava 179 graus. Dar mais aderencia a
+     * traseira e o que todo jogo de corrida faz para que o carro empurre em vez
+     * de rodar quando o piloto exagera.
+     */
+    this.rearGripBias = 1.45;
     /** @type {number} Downforce coefficient; grows with the square of speed. */
-    this.downforce = 5.2;
+    this.downforce = 3.0;
 
     /* ---- state -------------------------------------------------------- */
 
@@ -235,6 +255,18 @@ export class Vehicle {
       body.applyForce(_force);
     }
 
+    // Arrasto do ar e resistencia ao rolamento, opostos a velocidade. Sao o que
+    // fixa a velocidade maxima de verdade, e valem no ar tambem — um kart que
+    // decola nao deveria continuar ganhando velocidade.
+    const v = body.velocity;
+    const vLen = v.length();
+    if (vLen > 0.05) {
+      const resist = this.dragCoefficient * vLen * vLen +
+        (this.groundedWheels > 0 ? this.rollingResistance : 0);
+      _force.copy(v).multiplyScalar(-resist / vLen);
+      body.applyForce(_force);
+    }
+
     let grounded = 0;
     let slipSum = 0;
     let offTrackCount = 0;
@@ -311,16 +343,22 @@ export class Vehicle {
 
       // Lateral: cancel the sideways velocity over one step, capped by grip.
       const wheelMass = body.mass / this.wheels.length;
-      let lateralForce = -vLateral * wheelMass * this.lateralGrip;
-      const lateralMax = load * this.lateralGrip * 0.25 * gripScale *
+      const gripBias = wheel.steers ? 1 : this.rearGripBias;
+      let lateralForce = -vLateral * wheelMass * this.lateralGrip * gripBias;
+      const lateralMax = load * this.lateralGrip * gripBias * 0.25 * gripScale *
         (this.handbrake && !wheel.steers ? 0.35 : 1);
       lateralForce = clamp(lateralForce, -lateralMax, lateralMax);
 
       // Longitudinal: drive and brake.
       let longitudinalForce = 0;
       if (wheel.drives && this.brake <= 0.01) {
-        const limit = 1 - clamp(speedAbs / this.maxSpeed, 0, 1);
-        longitudinalForce = this.throttle * this.engineForce * (0.25 + 0.75 * limit);
+        // A curva de tracao tem que CHEGAR a zero no teto. Um piso residual
+        // (era 0.25) significa que o kart nunca para de acelerar: medido, ele
+        // passava de 280 km/h numa pista com descidas.
+        const ratio = clamp(speedAbs / this.maxSpeed, 0, 1);
+        const limit = 1 - ratio * ratio;
+        const pushing = Math.sign(this.throttle) === Math.sign(vForward) || speedAbs < 0.5;
+        longitudinalForce = this.throttle * this.engineForce * (pushing ? limit : 1);
       }
       if (this.brake > 0.01) {
         // Brake opposes motion; it must never drive the kart backwards.
@@ -336,7 +374,7 @@ export class Vehicle {
 
       // Friction circle: a tyre has one budget, spent on turning or on driving.
       const combined = Math.hypot(lateralForce, longitudinalForce);
-      const budget = load * this.longitudinalGrip * 0.4 * gripScale;
+      const budget = load * this.longitudinalGrip * 0.4 * gripScale * gripBias;
       if (combined > budget && combined > 1e-3) {
         const scale = budget / combined;
         lateralForce *= scale;
