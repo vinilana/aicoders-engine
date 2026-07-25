@@ -40,6 +40,26 @@ if (pkg.sideEffects !== false) {
 }
 if (errors === 0) ok('metadados de publicacao completos');
 
+/* ------------------------------------------------- versao em sincronia */
+
+// A engine exporta a propria versao. Se ela divergir do package.json, quem
+// consome recebe um numero que nao corresponde ao que instalou — e nada quebra,
+// o que e justamente o que torna esse erro dificil de notar.
+try {
+  const barrel = readFileSync(join(ROOT, 'src', 'index.js'), 'utf8');
+  const m = /export const VERSION = '([^']+)'/.exec(barrel);
+  if (m === null) {
+    warn('src/index.js nao exporta VERSION');
+  } else if (m[1] !== pkg.version) {
+    fail('VERSION em src/index.js e "' + m[1] + '" mas package.json diz "' +
+      pkg.version + '"');
+  } else {
+    ok('VERSION do barril bate com o package.json (' + pkg.version + ')');
+  }
+} catch (error) {
+  warn('nao foi possivel ler src/index.js: ' + error.message);
+}
+
 /* ------------------------------------------------------- exports resolvem */
 
 /**

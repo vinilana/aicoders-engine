@@ -210,6 +210,32 @@ export class CollisionWorld {
      * inside one receive buoyancy, drag and the current before integration.
      */
     waters: import('./WaterVolume.js').WaterVolume[];
+    /**
+     * @type {Array<function(number): void>} Called at the start of every
+     * substep, with the substep duration.
+     *
+     * Anything that applies forces in response to the current velocity —
+     * a vehicle's tyres, a thruster, a spring controller — has to run at the
+     * solver's rate, not the frame's. Applied once per frame instead, gravity
+     * gets integrated several times for each correction, and the controller can
+     * never do better than lag it: a kart parked on a slope creeps downhill
+     * forever no matter how much grip its tyres are given.
+     */
+    substepCallbacks: ((arg0: number) => void)[];
+    /**
+     * @type {Array<function(number): void>} Called after velocities have been
+     * integrated, before contacts are solved.
+     *
+     * Este e o lugar das restricoes de velocidade — atrito de pneu, por
+     * exemplo. Um controlador que roda ANTES da integracao le a velocidade sem
+     * a gravidade daquele passo, e portanto nunca a cancela: o kart parado numa
+     * rampa escorrega um pouquinho a cada substep, para sempre. Rodando depois,
+     * ele ve exatamente a velocidade que precisa anular.
+     *
+     * Forcas aqui nao funcionam: o acumulador acabou de ser zerado. Use
+     * impulsos.
+     */
+    velocityConstraintCallbacks: ((arg0: number) => void)[];
     /** @private @type {Array<*>} Broad phase result buffer. */
     private _colliderList;
     /** @private @type {Array<*>} Broad phase result buffer for bodies. */
@@ -282,6 +308,29 @@ export class CollisionWorld {
         shared: boolean;
         baked: number;
     };
+    /**
+     * Registers a callback run at the start of every substep.
+     * @param {function(number): void} fn Receives the substep duration.
+     * @returns {function(number): void} fn, for later removal.
+     */
+    onSubstep(fn: (arg0: number) => void): (arg0: number) => void;
+    /**
+     * Registers a velocity constraint, run after integration.
+     * Use impulses, not forces: the force accumulator has just been cleared.
+     * @param {function(number): void} fn Receives the substep duration.
+     * @returns {function(number): void} fn
+     */
+    onVelocityConstraint(fn: (arg0: number) => void): (arg0: number) => void;
+    /**
+     * @param {function(number): void} fn
+     * @returns {boolean}
+     */
+    offVelocityConstraint(fn: (arg0: number) => void): boolean;
+    /**
+     * @param {function(number): void} fn
+     * @returns {boolean} true when it was registered
+     */
+    offSubstep(fn: (arg0: number) => void): boolean;
     /**
      * Adds a fluid region.
      * @param {import('./WaterVolume.js').WaterVolume} volume

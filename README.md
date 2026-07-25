@@ -501,6 +501,34 @@ engine.onFixedUpdate((step) => { world.step(step); ball.syncNode(ballMesh); }, 6
 Queries diretas tambem estao disponiveis: `world.sphereCast`, `world.capsuleCast`, `world.raycast`,
 `world.overlapSphere`, `world.overlapCapsule`.
 
+**Controladores na taxa do solver.** Qualquer coisa que aplique forcas em
+resposta a velocidade — pneu de veiculo, propulsor, mola controlada — precisa
+rodar junto com o solver, e nao uma vez por frame:
+
+```js
+// Forcas: antes da integracao, onde o acumulador ainda sera lido.
+world.onSubstep((h) => {
+  body.applyForce(molaDaSuspensao(h));
+});
+
+// Restricoes de velocidade: depois da integracao. Use IMPULSOS aqui — o
+// acumulador de forca acabou de ser zerado.
+world.onVelocityConstraint((h) => {
+  const deslize = velocidadeLateralNoContato();
+  body.applyImpulse(cancelar(deslize, h), pontoDeContato);
+});
+```
+
+**A ordem das duas fases nao e detalhe.** Um pneu que roda antes da integracao
+le a velocidade sem a gravidade daquele passo, e portanto nunca consegue anula-la:
+o veiculo parado numa rampa escorrega para sempre, por mais aderencia que se de
+a ele. Rodando depois, ele ve exatamente a velocidade que precisa zerar. A
+mesma armadilha vale para uma forca aplicada uma vez por frame, que entrega
+`F * h` e nao `F * dt`, porque o primeiro substep zera o acumulador.
+
+Ambos aceitam varios callbacks e devolvem a funcao registrada, para remover
+depois com `offSubstep` / `offVelocityConstraint`.
+
 **Cenas inteiras colidiveis.** Para milhares de props instanciados, `addStaticInstanced` constroi
 uma unica BVH de triangulos e da a cada instancia so a sua matriz:
 
@@ -747,6 +775,20 @@ engine.onRender((renderer, camera) => {
 | Bone texture uma vez por frame | `Renderer._bindSkeleton` | Reupload do esqueleto em cada passe (sombra, depth, cor) |
 | Pools e scratch em escopo de modulo | render list, raycaster, math, BVH | Pressao de GC: o frame em regime permanente nao aloca |
 | Timer queries em ring de 2 slots | `Renderer._beginGPUTimer` | Stall de pipeline ao ler o tempo de GPU |
+
+### Uma armadilha que vale conhecer
+
+Chamar `node.updateWorldMatrix(true)` por conta propria e legitimo — e como se
+le uma posicao de mundo no meio do frame. Mas isso limpa os flags de sujeira que
+a cena usa para saber o que se moveu, e ate a versao 1.0.0 isso fazia a malha
+manter os bounds de broadphase que tinha ao nascer: ela sumia da tela assim que
+saia do lugar, continuando a projetar sombra (o passe de sombra nao consulta o
+broadphase).
+
+Desde 1.1.0 a cena compara versoes de matriz em vez de confiar nos flags, entao
+o comportamento e correto independentemente de quem atualizou o quer que seja.
+Ainda assim, prefira apenas escrever `position` / `quaternion` e deixar
+`Scene.updateMatrices()` fazer o trabalho: e mais barato e nao depende de ordem.
 
 ### O que voce deve fazer
 

@@ -3,6 +3,49 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento conforme [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.1.0] — 2026-07-25
+
+Duas mudancas na engine que sairam da construcao do exemplo de kart. As duas
+valem para qualquer jogo, nao so para veiculos.
+
+### Adicionado
+
+- **`CollisionWorld.onSubstep(fn)`** e **`CollisionWorld.onVelocityConstraint(fn)`**:
+  ganchos para rodar codigo na taxa do solver, e nao na do frame.
+
+  Um controlador que aplica forcas em resposta a velocidade — pneu, propulsor,
+  mola controlada — precisa dos dois. `onSubstep` roda antes da integracao e e
+  onde forcas funcionam. `onVelocityConstraint` roda depois dela, e e onde
+  restricoes de velocidade funcionam; ali o acumulador de forca ja foi zerado,
+  entao use impulsos.
+
+  A ordem importa e nao e detalhe: um pneu que roda antes da integracao le a
+  velocidade sem a gravidade daquele passo e portanto nunca consegue anula-la.
+  Na pratica, um veiculo parado numa rampa escorrega para sempre, por mais
+  aderencia que se de a ele. Foi exatamente esse bug que motivou os ganchos.
+
+### Corrigido
+
+- **Malha some ao se mover, mas continua projetando sombra.**
+
+  `Scene.updateMatrices` marcava para o broadphase apenas os meshes cuja matriz
+  mudou naquela chamada. Quem chamasse `updateWorldMatrix(true)` por conta
+  propria — coisa legitima, para ler uma posicao de mundo no meio do frame —
+  consumia os flags de sujeira, e a cena concluia que nada se moveu. O proxy
+  ficava com os bounds do nascimento e a malha desaparecia assim que saia do
+  lugar onde comecou. A sombra continuava, porque o passe de sombra nao consulta
+  o broadphase.
+
+  Agora a decisao compara versoes (`Mesh._bvhVersion` contra
+  `worldMatrixVersion`), o que torna o resultado independente de quem atualizou
+  a matriz. Custo: uma comparacao de inteiro por no, dentro de um walk que ja
+  existia.
+
+  Atinge qualquer hierarquia em que o pai se move e os filhos tem transformacao
+  local fixa — um personagem, um veiculo, uma torre. No kart, o corpo inteiro
+  sumia e sobravam as quatro rodas, que so escapavam porque tem a matriz local
+  reescrita todo frame.
+
 ## [1.0.0] — 2026-07-25
 
 Primeira versao publicavel. A engine passa a ser consumivel como pacote.
@@ -62,4 +105,5 @@ Primeira versao publicavel. A engine passa a ser consumivel como pacote.
   WSL2 com rede espelhada, onde um processo do Windows segura a porta sem
   aparecer no `ss`.
 
+[1.1.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.0.0
