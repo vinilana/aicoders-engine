@@ -6,7 +6,7 @@ de propósito. É uma base limpa para você construir o jogo em cima.
 
 ```bash
 node tools/serve.mjs
-# abra http://localhost:8080/games/voxel/
+# abra a URL que o servidor imprimir (padrao http://localhost:8080/games/voxel/)
 ```
 
 Parâmetros de URL: `?seed=1337` (número ou texto) e `?distance=8` (raio em chunks).

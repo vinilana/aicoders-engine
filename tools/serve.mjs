@@ -96,14 +96,20 @@ function parseArgs(argv) {
     host: '0.0.0.0',
     root: PROJECT_ROOT,
     quiet: false,
-    listing: true
+    listing: true,
+    // Only the default port may drift. A caller that asked for a specific port
+    // (the browser test harness, for one) is then fetching that exact port, so
+    // silently moving would turn a clear error into a mystery timeout.
+    portExplicit: false
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--port' || arg === '-p') {
       options.port = parseInt(argv[++i], 10);
+      options.portExplicit = true;
     } else if (arg.startsWith('--port=')) {
       options.port = parseInt(arg.slice(7), 10);
+      options.portExplicit = true;
     } else if (arg === '--host' || arg === '-h') {
       options.host = String(argv[++i]);
     } else if (arg.startsWith('--host=')) {
@@ -435,9 +441,34 @@ export function startServer(options) {
     }
   });
 
+  const firstPort = options.port;
+  let portAttempts = 0;
+  const MAX_PORT_ATTEMPTS = 20;
+
   server.on('error', (error) => {
     if (error && error.code === 'EADDRINUSE') {
-      process.stderr.write(`\n  ERRO: a porta ${options.port} ja esta em uso. Use --port <outra>.\n\n`);
+      // A busy port is worth explaining rather than just reporting. Under WSL2
+      // with mirrored networking a *Windows* process can hold the port: nothing
+      // shows up in `ss` inside Linux, the bind still fails, and the browser
+      // happily connects to that other process and loads forever.
+      if (!options.portExplicit && portAttempts < MAX_PORT_ATTEMPTS) {
+        portAttempts++;
+        const next = firstPort + portAttempts;
+        process.stderr.write(`  aviso: porta ${options.port} ocupada, tentando ${next}...\n`);
+        options.port = next;
+        server.listen(options.port, options.host);
+        return;
+      }
+
+      const range = options.portExplicit
+        ? `a porta ${options.port} ja esta em uso`
+        : `nenhuma porta livre entre ${firstPort} e ${firstPort + MAX_PORT_ATTEMPTS}`;
+      process.stderr.write(
+        `\n  ERRO: ${range}.\n` +
+        `  Use --port <outra>.\n\n` +
+        `  Se nada aparece em "ss -ltn" mas o bind falha, quem segura a porta esta\n` +
+        `  fora do WSL. No PowerShell: netstat -ano | findstr :${options.port}\n\n`
+      );
       process.exit(1);
     }
     process.stderr.write(`\n  ERRO no servidor: ${error && error.message ? error.message : String(error)}\n\n`);
@@ -453,6 +484,11 @@ export function startServer(options) {
       `  raiz:  ${options.root}`,
       `  local: http://localhost:${port}/`
     ];
+    if (port !== firstPort) {
+      lines.splice(2, 0,
+        `  ATENCAO: a porta ${firstPort} estava ocupada por outro processo.`,
+        `  Use o endereco abaixo, nao http://localhost:${firstPort}/.`);
+    }
     if (options.host === '0.0.0.0' || options.host === '::') {
       const addresses = localAddresses();
       for (let i = 0; i < addresses.length; i++) lines.push(`  rede:  http://${addresses[i]}:${port}/`);
