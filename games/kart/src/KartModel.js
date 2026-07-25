@@ -170,17 +170,15 @@ export class KartModel {
   /**
    * Places a wheel and applies its roll and steering.
    * @param {number} index
-   * @param {Vec3} worldPosition
+   * @param {Vec3} localPosition Wheel centre in chassis space.
    * @param {number} spin Roll angle in radians.
    * @param {number} steerAngle Steering angle; ignored on the rear pair.
-   * @param {Quat} chassisRotation
    */
-  setWheel(index, worldPosition, spin, steerAngle, chassisRotation) {
+  setWheelLocal(index, localPosition, spin, steerAngle) {
     const pivot = this.wheels[index];
-    // The wheels hang off the root, so their transform is expressed in the
-    // root's space; converting here keeps the caller in world space.
-    pivot.position.copy(worldPosition);
-    this.root.worldToLocal(pivot.position);
+    // Already in the root's space: no world matrix, no inverse, no dependency
+    // on what has been updated yet this frame.
+    pivot.position.copy(localPosition);
 
     _spin.setFromAxisAngle(_axisX, spin);
     if (index < 2 && steerAngle !== 0) {
@@ -198,8 +196,11 @@ export class KartModel {
   setTransform(position, quaternion) {
     this.root.position.copy(position);
     this.root.quaternion.copy(quaternion);
-    this.root.updateMatrix();
-    this.root.updateWorldMatrix(true);
+    // Deliberately does NOT force a world matrix rebuild. The scene's own walk
+    // does that, and forcing it here consumes the dirty flags the scene relies
+    // on to refresh broad phase proxies — which used to make the whole body
+    // vanish from the frustum test while still casting a shadow.
+    this.root.matrixWorldNeedsUpdate = true;
   }
 
   /** @param {boolean} value */

@@ -61,6 +61,8 @@ export class Minimap {
     this.margin = options.margin !== undefined ? options.margin : 18;
     /** @type {boolean} */
     this.enabled = true;
+    /** @type {Color} Backdrop used only inside the minimap pass. */
+    this.background = new Color(0.055, 0.075, 0.10);
     /**
      * @type {boolean} When true the map turns with the kart; when false north
      * stays up. Rotating is easier to read while driving, fixed is easier to
@@ -203,7 +205,15 @@ export class Minimap {
     camera.updateMatrix();
     camera.updateWorldMatrix(true);
 
+    // Fundo proprio durante o passe: o ceu da cena e claro e a pista some nele.
+    // Trocado e restaurado em volta do render para nao afetar o mundo.
+    const previousBackground = scene.background;
+    const previousFog = scene.fog;
+    scene.background = this.background;
+    scene.fog = null; // nevoa num mapa de 230 m de lado so apaga a pista
     this.renderer.renderToTarget(scene, camera, this.target);
+    scene.background = previousBackground;
+    scene.fog = previousFog;
   }
 
   /**

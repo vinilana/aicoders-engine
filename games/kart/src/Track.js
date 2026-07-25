@@ -19,8 +19,12 @@ import { Geometry } from '../../../src/render/Geometry.js';
 export const ROAD_HALF_WIDTH = 7.0;
 /** Height of the wall that stops a kart leaving the circuit. */
 export const BARRIER_HEIGHT = 1.35;
-/** How far the barrier sits beyond the road edge. */
-export const BARRIER_OFFSET = 0.35;
+/** How far the barrier sits beyond the road edge, past the kerb. */
+export const BARRIER_OFFSET = 1.85;
+/** Width of the red and white kerb outside the racing surface. */
+export const KERB_WIDTH = 1.0;
+/** Length of one kerb stripe along the track, in metres. */
+export const KERB_STRIPE = 3.0;
 /** Samples taken along the spline; also the resolution of the road mesh. */
 export const TRACK_SAMPLES = 720;
 /** How many checkpoints the lap is split into. */
@@ -272,21 +276,30 @@ export class Track {
   buildRoadGeometry() {
     const samples = this.samples;
     const n = samples.length;
-    // Five vertices across: outer shoulder, road edge, centre, road edge, outer.
-    const across = [
-      -ROAD_HALF_WIDTH - 2.5, -ROAD_HALF_WIDTH, 0, ROAD_HALF_WIDTH, ROAD_HALF_WIDTH + 2.5,
-    ];
-    const drop = [-0.35, 0, 0, 0, -0.35];
+
+    // Cross section, from the left verge to the right one. The kerb is a real
+    // strip of geometry rather than a texture: it has to be there for the tyre
+    // model to notice the surface change, and it is what tells a driver where
+    // the track actually ends.
+    const K = ROAD_HALF_WIDTH + KERB_WIDTH;
+    const across = [-K - 2.5, -K, -ROAD_HALF_WIDTH, 0, ROAD_HALF_WIDTH, K, K + 2.5];
+    const drop = [-0.45, -0.06, 0, 0, 0, -0.06, -0.45];
+    // 0 = asphalt, 1 = kerb, 2 = verge. Drives the vertex colour.
+    const kind = [2, 1, 1, 0, 1, 1, 2];
     const cols = across.length;
 
     const positions = new Float32Array(n * cols * 3);
     const normals = new Float32Array(n * cols * 3);
     const uvs = new Float32Array(n * cols * 2);
+    const colors = new Float32Array(n * cols * 4);
     const indices = new Uint32Array(n * (cols - 1) * 6);
 
     let v = 0;
     for (let i = 0; i < n; i++) {
       const s = samples[i];
+      // Kerb stripes alternate along the lap, in whole stripe lengths.
+      const stripe = Math.floor(s.distance / KERB_STRIPE) % 2 === 0;
+
       for (let c = 0; c < cols; c++) {
         const o = v * 3;
         positions[o] = s.position.x + s.right.x * across[c] + s.normal.x * drop[c];
@@ -295,9 +308,21 @@ export class Track {
         normals[o] = s.normal.x;
         normals[o + 1] = s.normal.y;
         normals[o + 2] = s.normal.z;
-        // V runs along the track so the texture streams past; U across it.
+
+        // U across the road, V streaming along it.
         uvs[v * 2] = c / (cols - 1);
-        uvs[v * 2 + 1] = s.distance * 0.12;
+        uvs[v * 2 + 1] = s.distance * 0.14;
+
+        // The material is white and the colour lives here, so one mesh and one
+        // draw call carry asphalt, kerb and verge.
+        const co = v * 4;
+        let r, g, b;
+        if (kind[c] === 0) { r = 0.075; g = 0.076; b = 0.080; }
+        else if (kind[c] === 1) {
+          if (stripe) { r = 0.72; g = 0.10; b = 0.09; }
+          else { r = 0.86; g = 0.86; b = 0.87; }
+        } else { r = 0.26; g = 0.30; b = 0.18; }
+        colors[co] = r; colors[co + 1] = g; colors[co + 2] = b; colors[co + 3] = 1;
         v++;
       }
     }
@@ -320,6 +345,7 @@ export class Track {
     geometry.setAttribute('aPosition', positions, 3);
     geometry.setAttribute('aNormal', normals, 3);
     geometry.setAttribute('aUV0', uvs, 2);
+    geometry.setAttribute('aColor', colors, 4);
     geometry.setIndex(indices);
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
@@ -411,13 +437,71 @@ export class Track {
     const indices = new Uint32Array(segments * segments * 6);
 
     const half = size * 0.5;
+    const samples = this.samples;
+    const sampleCount = samples.length;
+
+    // Verge width: where the ground stops hugging the circuit and goes back to
+    // being landscape.
+    // O solo segue a ELEVACAO da pista numa faixa larga, e o ruido entra como
+    // perturbacao por cima em vez de substituir a altura.
+    //
+    // Duas tentativas erradas antes desta: um campo de altura independente sobe
+    // acima do asfalto e a grama engole a pista em pedacos; uma faixa estreita
+    // resolve isso mas deixa os trechos elevados como tapetes voadores sobre o
+    // terreno baixo em volta. O que a pista precisa e de um morro embaixo dela.
+    const inner = ROAD_HALF_WIDTH + 2;
+    const outer = ROAD_HALF_WIDTH + 58;
+    // Dentro deste raio o solo NUNCA sobe acima do asfalto, aconteca o que
+    // acontecer com o ruido.
+    const clampRadius = ROAD_HALF_WIDTH + 5;
+
     let v = 0;
     for (let z = 0; z <= segments; z++) {
       for (let x = 0; x <= segments; x++) {
         const wx = (x / segments) * size - half;
         const wz = (z / segments) * size - half;
-        // Gentle rolling ground, pushed below the road so it never pokes through.
-        const wy = Math.sin(wx * 0.017) * 2.4 + Math.cos(wz * 0.021) * 2.0 - 2.6;
+
+        // Paisagem: uma base ampla mais um detalhe de frequencia maior.
+        const scenicBase = Math.sin(wx * 0.011) * 5.0 + Math.cos(wz * 0.013) * 4.0;
+        const detail = Math.sin(wx * 0.047) * 0.9 + Math.cos(wz * 0.053) * 0.8;
+
+        // Nearest point on the centre line, in plan. The ground has to follow
+        // the circuit's elevation: an independent height field will sooner or
+        // later rise above the asphalt, and then the grass swallows the track
+        // in pieces — which looks like broken geometry and is not.
+        let bestSq = Infinity;
+        let bestY = 0;
+        for (let i = 0; i < sampleCount; i++) {
+          const p = samples[i].position;
+          const dx = p.x - wx;
+          const dz = p.z - wz;
+          const d = dx * dx + dz * dz;
+          if (d < bestSq) { bestSq = d; bestY = p.y; }
+        }
+        const distance = Math.sqrt(bestSq);
+
+        // 1 right beside the road, 0 out in the landscape.
+        let influence;
+        if (distance <= inner) influence = 1;
+        else if (distance >= outer) influence = 0;
+        else {
+          const t = (distance - inner) / (outer - inner);
+          influence = 1 - (t * t * (3 - 2 * t));
+        }
+
+        // Beside the road the ground sits just below it, so the shoulder of the
+        // road mesh always meets grass and never pokes through it.
+        // Altura de base: longe e a paisagem, perto e a pista.
+        const verge = bestY - 1.0;
+        const base = scenicBase + (verge - scenicBase) * influence;
+        // Ondulacao por cima, amortecida junto da pista para o acostamento
+        // ficar plano onde o carro pisa.
+        let wy = base + detail * (1 - influence * 0.85);
+        if (distance < clampRadius) {
+          const ceiling = bestY - 0.25;
+          if (wy > ceiling) wy = ceiling;
+        }
+
         const o = v * 3;
         positions[o] = wx; positions[o + 1] = wy; positions[o + 2] = wz;
         normals[o] = 0; normals[o + 1] = 1; normals[o + 2] = 0;

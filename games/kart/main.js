@@ -133,16 +133,16 @@ class KartGame {
   /** @private */
   _buildSky() {
     this.scene.background = new Color(0.42, 0.62, 0.86);
-    this.scene.ambientLight.set(0.55, 0.66, 0.85);
-    this.scene.ambientIntensity = 0.42;
-    this.scene.setFogExp2(new Color(0.46, 0.62, 0.82), 0.0022);
+    this.scene.ambientLight.set(0.60, 0.64, 0.72);
+    this.scene.ambientIntensity = 0.26;
+    this.scene.setFogExp2(new Color(0.52, 0.66, 0.84), 0.0011);
     this.scene.fog.maxOpacity = 0.9;
 
     this.sun = new DirectionalLight();
     this.sun.position.set(90, 130, 60);
     this.sun.target.set(0, 0, 0);
     this.sun.color.set(1.0, 0.96, 0.88);
-    this.sun.intensity = 2.6;
+    this.sun.intensity = 3.4;
     this.sun.castShadow = true;
     this.scene.add(this.sun);
   }
@@ -156,10 +156,12 @@ class KartGame {
 
     // --- road ---------------------------------------------------------
     const roadGeometry = this.track.buildRoadGeometry();
+    // Branco de proposito: a cor vem do atributo aColor da malha, que carrega
+    // asfalto, zebra e acostamento numa unica geometria e num unico draw call.
     const roadMaterial = new StandardMaterial({
       name: 'Asphalt',
-      baseColor: new Color(0.20, 0.21, 0.23),
-      roughness: 0.86,
+      baseColor: new Color(1, 1, 1),
+      roughness: 0.9,
       metallic: 0.0,
     });
     roadMaterial.baseColorMap = asphaltColor;
@@ -444,9 +446,11 @@ class KartGame {
     const vehicle = this.vehicle;
     this.model.setTransform(vehicle.body.position, vehicle.body.quaternion);
     for (let i = 0; i < vehicle.wheels.length; i++) {
-      vehicle.getWheelPosition(i, _wheelPos);
-      this.model.setWheel(i, _wheelPos, vehicle.wheels[i].spin,
-        vehicle.steerAngle, vehicle.body.quaternion);
+      // Posicao da roda no espaco do chassi: nao precisa de matriz de mundo nem
+      // da sua inversa, e nao depende da ordem em que as matrizes foram
+      // atualizadas neste frame.
+      vehicle.getWheelLocalPosition(i, _wheelPos);
+      this.model.setWheelLocal(i, _wheelPos, vehicle.wheels[i].spin, vehicle.steerAngle);
     }
   }
 

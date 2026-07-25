@@ -180,7 +180,21 @@ export class Scene extends Node3D {
       const parentChanged = _flagStack[_sp];
       _stack[_sp] = null;
       const changed = node._updateTransformStep(parentChanged);
-      if (changed === 1 && node.isMesh === true) dirty[dirtyCount++] = node;
+      // A mesh needs its broad phase proxy refreshed when its world matrix
+      // changed *at all* — not only when it changed inside this call.
+      //
+      // Anyone may legitimately call `updateWorldMatrix(true)` themselves (to
+      // read a world position mid frame, say). Doing so clears the dirty flags,
+      // so by the time this walk runs the node reports "unchanged" and, if that
+      // were the only test, its proxy would keep the bounds it had at spawn.
+      // The mesh then vanishes the moment it moves away from where it started,
+      // while still casting a shadow — the shadow pass does not consult the
+      // broad phase. Comparing versions instead makes the result independent of
+      // who updated the matrix.
+      if (node.isMesh === true &&
+          (changed === 1 || node.worldMatrixVersion !== node._bvhVersion)) {
+        dirty[dirtyCount++] = node;
+      }
       const children = node.children;
       for (let i = 0, n = children.length; i < n; i++) {
         _stack[_sp] = children[i];
@@ -226,6 +240,9 @@ export class Scene extends Node3D {
       mesh._prevCenterX = _center.x;
       mesh._prevCenterY = _center.y;
       mesh._prevCenterZ = _center.z;
+      // Records which world matrix these bounds came from, so the walk above
+      // can tell a stale proxy from a current one.
+      mesh._bvhVersion = mesh.worldMatrixVersion;
     }
     this._dirtyCount = 0;
     return this;

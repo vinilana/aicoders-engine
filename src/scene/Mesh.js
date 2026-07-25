@@ -88,6 +88,16 @@ export class Mesh extends Node3D {
   /** @type {number} Proxy id inside `Scene.bvh`, -1 when not registered. */
   _bvhProxy = -1;
 
+  /**
+   * @type {number} World matrix version the broad phase proxy was built from.
+   *
+   * Compared by `Scene.updateMatrices` so that a world matrix updated outside
+   * the scene walk — by anyone calling `updateWorldMatrix(true)` directly —
+   * still refreshes the proxy. Without it such a mesh keeps the bounds it had
+   * when it was added and disappears as soon as it moves.
+   */
+  _bvhVersion = -1;
+
   /** @private worldMatrixVersion used the last time bounds were rebuilt. */
   _boundsVersion = -1;
   /** @private Center of the last broadphase proxy, used to derive displacement. */

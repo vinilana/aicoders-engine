@@ -386,6 +386,23 @@ export class Vehicle {
   }
 
   /**
+   * Wheel centre in chassis space, which is what the visual actually needs.
+   *
+   * Cheaper than the world space version and, more importantly, independent of
+   * whether any world matrix has been refreshed yet this frame.
+   *
+   * @param {number} index
+   * @param {Vec3} out
+   * @returns {Vec3} out
+   */
+  getWheelLocalPosition(index, out) {
+    const wheel = this.wheels[index];
+    const drop = wheel.grounded ? wheel.length : this.suspensionRest;
+    out.set(wheel.anchor.x, wheel.anchor.y - drop, wheel.anchor.z);
+    return out;
+  }
+
+  /**
    * World position of a wheel's centre, for placing the visual.
    * @param {number} index
    * @param {Vec3} out
