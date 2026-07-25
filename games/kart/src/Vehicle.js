@@ -35,6 +35,7 @@ const _wheelForward = new Vec3();
 const _wheelRight = new Vec3();
 const _tmp = new Vec3();
 const _hit = createSweepHit();
+const _applyAt = new Vec3();
 const _q = new Quat();
 
 /** Wheel layout: front left, front right, rear left, rear right. */
@@ -74,6 +75,14 @@ class Wheel {
     this.slip = 0;
     /** @type {number} Suspension length right now. */
     this.length = 0;
+    /** @type {number} Carga apurada na fase de forcas, usada pelo atrito. */
+    this.load = 0;
+    /** @type {number} Multiplicador de aderencia da superficie. */
+    this.gripScale = 1;
+    /** @type {Vec3} Eixo longitudinal da roda, no plano de contato. */
+    this.wheelForward = new Vec3();
+    /** @type {Vec3} Eixo lateral da roda, no plano de contato. */
+    this.wheelRight = new Vec3();
   }
 }
 
@@ -125,12 +134,39 @@ export class Vehicle {
      * flick of the wheel at top speed spins the kart instantly.
      */
     this.steerSpeedFalloff = 0.72;
-    // Aderencia e expressa por unidade de carga, entao ela acompanha a
-    // gravidade: baixar a gravidade sem recompor isto deixa o kart escorregando.
-    /** @type {number} Lateral grip coefficient of a loaded tyre. */
-    this.lateralGrip = 4.6;
-    /** @type {number} Longitudinal grip, used to cap drive and brake force. */
-    this.longitudinalGrip = 3.3;
+    /**
+     * @type {number} Coeficiente de atrito do pneu (mu).
+     *
+     * Um numero so, do jeito que Coulomb funciona: a forca maxima que um pneu
+     * entrega e mu vezes a carga sobre ele, gastavel em qualquer direcao. Pneu
+     * de competicao fica entre 1,2 e 1,9. Aqui e 1,25: acima disso o kart cola
+     * na pista (medido: 0 a 50 km/h em 0,94 s e frenagem a 2,6 g) e o esterco
+     * total deixa de quebrar aderencia, o que faz o carro parecer sobre trilhos.
+     * Continua uma ordem de grandeza acima de tan(15 graus) = 0,27, entao o
+     * atrito estatico na rampa nao corre risco.
+     */
+    this.tyreFriction = 1.25;
+    /**
+     * @type {number} Teto da carga usada para aderencia, em pesos estaticos.
+     *
+     * A carga instantanea da suspensao dispara num solavanco — pode bater no
+     * limite da mola, 26 kN — e usar isso cru multiplicaria a aderencia por
+     * cinquenta num unico passo, arremessando o kart. Transferencia de peso
+     * real raramente passa de umas 2,5 vezes a carga estatica de uma roda.
+     */
+    this.maxLoadFactor = 1.5;
+    /**
+     * @type {number} Fracao do deslizamento cancelada por passo, 0..1.
+     *
+     * Pedir 100% realimenta: a forca entra no ponto de contato, vira torque,
+     * muda a velocidade angular e volta como deslizamento no passo seguinte.
+     * Com o atrito aplicado como FORCA, pedir 100% realimentava pela rotacao e
+     * o rumo invertia 120 vezes por segundo. Com impulso a malha e estavel, e
+     * 100% e o que zera a fluencia: qualquer valor menor deixa uma fracao da
+     * gravidade acumular a cada frame, e o kart desce a rampa devagarinho para
+     * sempre.
+     */
+    this.slipRelaxation = 1.0;
     /** @type {number} Grip multiplier when off the racing surface. */
     this.offTrackGrip = 0.45;
     /** @type {number} Extra yaw damping, keeps the kart from spinning forever. */
@@ -146,6 +182,15 @@ export class Vehicle {
      * de rodar quando o piloto exagera.
      */
     this.rearGripBias = 1.45;
+    /**
+     * @type {number} Altura do ponto de aplicacao do atrito, 0 = chao,
+     * 1 = centro de massa.
+     *
+     * Aplicar o impulso lateral inteiro no ponto de contato gera um torque de
+     * rolagem grande demais e o kart capota em curva. Subir o ponto de
+     * aplicacao e o equivalente a um centro de rolagem alto.
+     */
+    this.rollCentre = 0.75;
     /** @type {number} Downforce coefficient; grows with the square of speed. */
     this.downforce = 2.2;
 
@@ -162,6 +207,10 @@ export class Vehicle {
     this.steer = 0;
     /** @type {boolean} */
     this.handbrake = false;
+    /** @private @type {Function|null} */
+    this._onSubstep = null;
+    /** @private @type {Function|null} */
+    this._onConstraint = null;
 
     /** @type {number} Current steering angle, smoothed towards the input. */
     this.steerAngle = 0;
@@ -191,6 +240,30 @@ export class Vehicle {
     this.body.position.set(0, 2, 0);
 
     this.world.addDynamic(this.body);
+
+    // As rodas rodam na taxa do solver, nao na do frame. Aplicado uma vez por
+    // frame, o atrito nunca alcanca a gravidade — que e integrada a cada
+    // substep — e o kart escorrega ladeira abaixo para sempre.
+    // Forcas antes da integracao, atrito depois dela. E a ordem que um solver
+    // usa, e a unica em que o pneu ve a gravidade que precisa anular.
+    this._onSubstep = (h) => this.applyForces(h);
+    this._onConstraint = (h) => this.applyTyreFriction(h);
+    if (typeof this.world.onSubstep === 'function') this.world.onSubstep(this._onSubstep);
+    if (typeof this.world.onVelocityConstraint === 'function') {
+      this.world.onVelocityConstraint(this._onConstraint);
+    }
+  }
+
+  /** Desregistra do mundo. */
+  dispose() {
+    if (this._onSubstep !== null && typeof this.world.offSubstep === 'function') {
+      this.world.offSubstep(this._onSubstep);
+      this._onSubstep = null;
+    }
+    if (this._onConstraint !== null && typeof this.world.offVelocityConstraint === 'function') {
+      this.world.offVelocityConstraint(this._onConstraint);
+      this._onConstraint = null;
+    }
   }
 
   /**
@@ -225,11 +298,34 @@ export class Vehicle {
   }
 
   /**
-   * Advances the vehicle. Call before `world.step`, so the forces this writes
-   * are integrated in the same step.
+   * Estado que muda por FRAME: suavizacao da direcao e rotacao do motor.
+   * A fisica das rodas nao vive aqui — ela roda por substep, em `simulate`.
    * @param {number} dt
    */
   update(dt) {
+    const speedAbs = Math.abs(this.speed);
+
+    // A direcao volta ao centro mais rapido do que sai dele, que e o que faz o
+    // kart parecer plantado em vez de nervoso.
+    const falloff = 1 / (1 + speedAbs * this.steerSpeedFalloff * 0.06);
+    const targetSteer = this.steer * this.maxSteer * falloff;
+    const rate = Math.abs(targetSteer) > Math.abs(this.steerAngle) ? 7.5 : 12.0;
+    this.steerAngle += (targetSteer - this.steerAngle) * Math.min(1, rate * dt);
+
+    // Nota do motor: sobretudo velocidade, mais um empurrao do patinar para que
+    // sair da inercia soe como esforco e nao como silencio.
+    const speedPart = clamp(speedAbs / this.maxSpeed, 0, 1);
+    const effortPart = clamp(Math.abs(this.throttle) * (1 - speedPart) * 0.6, 0, 1);
+    const target = clamp(speedPart + effortPart * 0.5 + this.slip * 0.15, 0, 1);
+    this.rpm += (target - this.rpm) * Math.min(1, 6 * dt);
+  }
+
+  /**
+   * Suspensao, downforce e arrasto. Roda ANTES da integracao, porque sao forcas
+   * e o integrador precisa ve-las no acumulador.
+   * @param {number} dt Duracao do substep.
+   */
+  applyForces(dt) {
     const body = this.body;
 
     // Referencial do chassi.
@@ -245,14 +341,6 @@ export class Vehicle {
 
     this.speed = body.velocity.dot(_forward);
     const speedAbs = Math.abs(this.speed);
-
-    // Steering falls off with speed, and the wheel returns to centre faster
-    // than it turns, which is what makes the kart feel planted rather than
-    // twitchy.
-    const falloff = 1 / (1 + speedAbs * this.steerSpeedFalloff * 0.06);
-    const targetSteer = this.steer * this.maxSteer * falloff;
-    const rate = Math.abs(targetSteer) > Math.abs(this.steerAngle) ? 7.5 : 12.0;
-    this.steerAngle += (targetSteer - this.steerAngle) * Math.min(1, rate * dt);
 
     // Downforce: pressing the kart onto the road as speed rises. Applied along
     // the chassis up axis so it also helps when landing at an angle.
@@ -273,6 +361,12 @@ export class Vehicle {
       _force.copy(v).multiplyScalar(-resist / vLen);
       body.applyForce(_force);
     }
+
+    // Carga estatica por roda, para limitar os picos da suspensao.
+    const gravityMag = this.world !== null && this.world.gravity !== undefined
+      ? this.world.gravity.length() : 9.81;
+    const staticLoad = body.mass * gravityMag / this.wheels.length;
+    const loadCeiling = staticLoad * this.maxLoadFactor;
 
     let grounded = 0;
     let slipSum = 0;
@@ -345,59 +439,25 @@ export class Vehicle {
       const vForward = _pointVel.dot(_wheelForward);
       const vLateral = _pointVel.dot(_wheelRight);
 
-      // The load on this tyre is what it can trade for grip.
-      const load = total;
+      // A carga sobre este pneu e o que ele tem para trocar por aderencia,
+      // limitada para que um solavanco na suspensao nao vire aderencia infinita.
+      const load = Math.min(total, loadCeiling);
       const gripScale = offTrackCount > 0 ? this.offTrackGrip : 1;
-
-      // Lateral: cancel the sideways velocity over one step, capped by grip.
       const wheelMass = body.mass / this.wheels.length;
       const gripBias = wheel.steers ? 1 : this.rearGripBias;
-      let lateralForce = -vLateral * wheelMass * this.lateralGrip * gripBias;
-      const lateralMax = load * this.lateralGrip * gripBias * 0.25 * gripScale *
-        (this.handbrake && !wheel.steers ? 0.35 : 1);
-      lateralForce = clamp(lateralForce, -lateralMax, lateralMax);
 
-      // Longitudinal: drive and brake.
-      let longitudinalForce = 0;
-      if (wheel.drives && this.brake <= 0.01) {
-        // A curva de tracao tem que CHEGAR a zero no teto. Um piso residual
-        // (era 0.25) significa que o kart nunca para de acelerar: medido, ele
-        // passava de 280 km/h numa pista com descidas.
-        const ratio = clamp(speedAbs / this.maxSpeed, 0, 1);
-        const limit = 1 - ratio * ratio;
-        const pushing = Math.sign(this.throttle) === Math.sign(vForward) || speedAbs < 0.5;
-        longitudinalForce = this.throttle * this.engineForce * (pushing ? limit : 1);
-      }
-      if (this.brake > 0.01) {
-        // Brake opposes motion; it must never drive the kart backwards.
-        const stopping = -Math.sign(vForward) * this.brake * this.brakeForce;
-        longitudinalForce += Math.abs(vForward) > 0.4 ? stopping : -vForward * wheelMass * 8;
-      }
-      if (this.handbrake && !wheel.steers) {
-        longitudinalForce += -Math.sign(vForward) * this.brakeForce * 0.9;
-      }
+      // O atrito nao acontece aqui: ele e uma restricao de velocidade e roda
+      // depois da integracao. O que fica guardado e o que ele vai precisar.
+      wheel.load = load;
+      wheel.gripScale = gripScale;
+      wheel.wheelForward.copy(_wheelForward);
+      wheel.wheelRight.copy(_wheelRight);
 
-      const longitudinalMax = load * this.longitudinalGrip * 0.35 * gripScale;
-      longitudinalForce = clamp(longitudinalForce, -longitudinalMax, longitudinalMax);
-
-      // Friction circle: a tyre has one budget, spent on turning or on driving.
-      const combined = Math.hypot(lateralForce, longitudinalForce);
-      const budget = load * this.longitudinalGrip * 0.4 * gripScale * gripBias;
-      if (combined > budget && combined > 1e-3) {
-        const scale = budget / combined;
-        lateralForce *= scale;
-        longitudinalForce *= scale;
-      }
-
-      _force.copy(_wheelRight).multiplyScalar(lateralForce)
-        .addScaled(_wheelForward, longitudinalForce);
-      body.applyForce(_force, wheel.contact);
-
-      // Slip signal for skid marks, audio and the HUD.
+      // Sinal de derrapagem para marca de pneu, audio e HUD.
       wheel.slip = clamp(Math.abs(vLateral) / 9, 0, 1);
       slipSum += wheel.slip;
 
-      // Visual spin follows the ground speed under the wheel.
+      // O giro visual acompanha a velocidade do chao sob a roda.
       wheel.spin += vForward / this.wheelRadius * dt;
     }
 
@@ -418,12 +478,69 @@ export class Vehicle {
       body.angularVelocity.multiplyScalar(Math.pow(0.25, dt));
     }
 
-    // Engine note: mostly speed, plus a kick from wheelspin so flooring it from
-    // a standstill sounds like effort rather than silence.
-    const speedPart = clamp(speedAbs / this.maxSpeed, 0, 1);
-    const effortPart = clamp(Math.abs(this.throttle) * (1 - speedPart) * 0.6, 0, 1);
-    const target = clamp(speedPart + effortPart * 0.5 + this.slip * 0.15, 0, 1);
-    this.rpm += (target - this.rpm) * Math.min(1, 6 * dt);
+  }
+
+  /**
+   * Atrito dos pneus, como restricao de velocidade.
+   *
+   * Roda DEPOIS que a gravidade entrou na velocidade, que e o que permite
+   * anula-la de verdade. Aplicado como impulso, porque o acumulador de forca ja
+   * foi zerado e porque atrito e uma restricao, nao uma forca.
+   *
+   * @param {number} dt Duracao do substep.
+   */
+  applyTyreFriction(dt) {
+    const body = this.body;
+    const wheels = this.wheels;
+
+    for (let i = 0; i < wheels.length; i++) {
+      const wheel = wheels[i];
+      if (wheel.grounded === false) continue;
+
+      body.getPointVelocity(wheel.contact, _pointVel);
+      const vForward = _pointVel.dot(wheel.wheelForward);
+      const vLateral = _pointVel.dot(wheel.wheelRight);
+      const wheelMass = body.mass / wheels.length;
+      const gripBias = wheel.steers ? 1 : this.rearGripBias;
+      const speedAbs = Math.abs(this.speed);
+
+      // Limite de Coulomb: mu * N, convertido em impulso deste passo.
+      const limit = wheel.load * this.tyreFriction * wheel.gripScale * gripBias;
+      const impulseLimit = limit * dt;
+
+      let lateralImpulse = -vLateral * wheelMass * this.slipRelaxation;
+      const lateralCap = impulseLimit * (this.handbrake && !wheel.steers ? 0.35 : 1);
+      lateralImpulse = clamp(lateralImpulse, -lateralCap, lateralCap);
+
+      let longitudinalImpulse = 0;
+      if (wheel.drives && this.brake <= 0.01) {
+        const ratio = clamp(speedAbs / this.maxSpeed, 0, 1);
+        const fade = 1 - ratio * ratio;
+        const pushing = Math.sign(this.throttle) === Math.sign(vForward) || speedAbs < 0.5;
+        longitudinalImpulse = this.throttle * this.engineForce * (pushing ? fade : 1) * dt;
+      }
+      if (this.brake > 0.01) {
+        longitudinalImpulse += -vForward * wheelMass * this.brake * this.slipRelaxation;
+      }
+      if (this.handbrake && !wheel.steers) {
+        longitudinalImpulse += -vForward * wheelMass * this.slipRelaxation;
+      }
+
+      // Circulo de atrito: um orcamento so, com prioridade lateral.
+      const restante = Math.sqrt(Math.max(0,
+        impulseLimit * impulseLimit - lateralImpulse * lateralImpulse));
+      longitudinalImpulse = clamp(longitudinalImpulse, -restante, restante);
+
+      // Ponto de aplicacao levantado ate perto do centro de massa: aplicar todo
+      // o impulso lateral no chao gera um torque de rolagem que capota o kart.
+      // Isso e o que um centro de rolagem alto faz num carro real.
+      _tmp.subVectors(body.position, wheel.contact);
+      _applyAt.copy(wheel.contact).addScaled(_tmp, this.rollCentre);
+
+      _force.copy(wheel.wheelRight).multiplyScalar(lateralImpulse)
+        .addScaled(wheel.wheelForward, longitudinalImpulse);
+      body.applyImpulse(_force, _applyAt);
+    }
   }
 
   /** @returns {number} speed in km/h, always positive. */

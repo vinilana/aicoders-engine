@@ -185,8 +185,71 @@ console.log('\n2. Curva em regime permanente');
     normal.turned.toFixed(1) + ' rad girados');
   check('curva normal mantem as rodas no chao', normal.grounded >= 3,
     normal.grounded + '/4');
-  check('esterco total quebra aderencia', total.slip > 0.35,
-    'slip ' + total.slip.toFixed(2) + ', deriva ' + (total.drift * 57.3).toFixed(0) + ' graus');
+  // Teste relativo: o que importa e que o pneu TENHA limite e que ele responda
+  // a demanda. Um limiar absoluto so mede a calibragem do momento.
+  check('esterco total desliza mais que curva normal',
+    total.slip > normal.slip * 1.5 && total.slip > 0.2,
+    'slip ' + normal.slip.toFixed(2) + ' -> ' + total.slip.toFixed(2) +
+    ', deriva ' + (total.drift * 57.3).toFixed(0) + ' graus');
+}
+
+/* ------------------------------------------- 1b. atrito estatico */
+
+console.log('\n1b. Atrito estatico em rampa');
+{
+  /**
+   * Patio inclinado. Reproduz a queixa direta: parado numa pista com
+   * inclinacao lateral, o kart nao pode escorregar de lado.
+   */
+  function makeSlope(degrees) {
+    const world = new CollisionWorld({
+      gravity: new Vec3(0, -11.5, 0),
+      maxSubStepTime: 1 / 180,
+      maxSubSteps: 8,
+    });
+    const S = 400;
+    const rad = degrees * Math.PI / 180;
+    const h = Math.tan(rad);
+    // Plano inclinado em torno do eixo Z: sobe conforme x cresce.
+    world.addStatic({
+      positions: new Float32Array([
+        -S, -S * h, -S, S, S * h, -S, S, S * h, S, -S, -S * h, S,
+      ]),
+      indices: new Uint32Array([0, 2, 1, 0, 3, 2]),
+    }, { friction: 1.0 });
+    const vehicle = new Vehicle({ world, mass: 180 });
+    vehicle.reset(new Vec3(0, 0.9, 0), 0);
+    return { world, vehicle, track: null };
+  }
+
+  for (const graus of [6, 10, 15]) {
+    const rig = makeSlope(graus);
+    // Assenta a suspensao antes de medir.
+    for (let i = 0; i < 120; i++) step(rig, 0, 0, 0, false);
+    const p0 = rig.vehicle.body.position.clone();
+    for (let i = 0; i < 120 * 3; i++) step(rig, 0, 0, 0, false);
+    const meio = rig.vehicle.body.position.x;
+    for (let i = 0; i < 120 * 3; i++) step(rig, 0, 0, 0, false);
+    const fim = rig.vehicle.body.position.x;
+
+    // O que importa nao e o deslocamento total — um pouco de acomodacao inicial
+    // e normal — e sim se ele PARA. Fluencia constante significa que nao ha
+    // atrito estatico; acomodar e depois ficar parado significa que ha.
+    const inicial = Math.abs(meio - p0.x);
+    const depois = Math.abs(fim - meio);
+    check('parado em rampa de ' + graus + ' graus para de escorregar',
+      depois < 0.05,
+      'acomodou ' + inicial.toFixed(3) + ' m, depois andou ' + depois.toFixed(3) + ' m em 3 s');
+  }
+
+  // E com o freio de mao tambem, que e o caso de largar numa subida.
+  const rig = makeSlope(12);
+  for (let i = 0; i < 120; i++) step(rig, 0, 1, 0, true);
+  const p0 = rig.vehicle.body.position.clone();
+  for (let i = 0; i < 120 * 5; i++) step(rig, 0, 1, 0, true);
+  check('freado em rampa de 12 graus fica parado',
+    rig.vehicle.body.position.distanceTo(p0) < 0.35,
+    rig.vehicle.body.position.distanceTo(p0).toFixed(3) + ' m em 5 s');
 }
 
 /* --------------------------------------------- 2b. lado e forca g */

@@ -1080,6 +1080,34 @@ export class CollisionWorld {
      */
     this.waters = [];
 
+    /**
+     * @type {Array<function(number): void>} Called at the start of every
+     * substep, with the substep duration.
+     *
+     * Anything that applies forces in response to the current velocity —
+     * a vehicle's tyres, a thruster, a spring controller — has to run at the
+     * solver's rate, not the frame's. Applied once per frame instead, gravity
+     * gets integrated several times for each correction, and the controller can
+     * never do better than lag it: a kart parked on a slope creeps downhill
+     * forever no matter how much grip its tyres are given.
+     */
+    this.substepCallbacks = [];
+
+    /**
+     * @type {Array<function(number): void>} Called after velocities have been
+     * integrated, before contacts are solved.
+     *
+     * Este e o lugar das restricoes de velocidade — atrito de pneu, por
+     * exemplo. Um controlador que roda ANTES da integracao le a velocidade sem
+     * a gravidade daquele passo, e portanto nunca a cancela: o kart parado numa
+     * rampa escorrega um pouquinho a cada substep, para sempre. Rodando depois,
+     * ele ve exatamente a velocidade que precisa anular.
+     *
+     * Forcas aqui nao funcionam: o acumulador acabou de ser zerado. Use
+     * impulsos.
+     */
+    this.velocityConstraintCallbacks = [];
+
     /** @private @type {Array<*>} Broad phase result buffer. */
     this._colliderList = [];
     /** @private @type {Array<*>} Broad phase result buffer for bodies. */
@@ -1216,6 +1244,53 @@ export class CollisionWorld {
     }
 
     return { colliders: colliders, shared: baked === 0, baked: baked };
+  }
+
+  /**
+   * Registers a callback run at the start of every substep.
+   * @param {function(number): void} fn Receives the substep duration.
+   * @returns {function(number): void} fn, for later removal.
+   */
+  onSubstep(fn) {
+    if (typeof fn === 'function' && this.substepCallbacks.indexOf(fn) === -1) {
+      this.substepCallbacks.push(fn);
+    }
+    return fn;
+  }
+
+  /**
+   * Registers a velocity constraint, run after integration.
+   * Use impulses, not forces: the force accumulator has just been cleared.
+   * @param {function(number): void} fn Receives the substep duration.
+   * @returns {function(number): void} fn
+   */
+  onVelocityConstraint(fn) {
+    if (typeof fn === 'function' && this.velocityConstraintCallbacks.indexOf(fn) === -1) {
+      this.velocityConstraintCallbacks.push(fn);
+    }
+    return fn;
+  }
+
+  /**
+   * @param {function(number): void} fn
+   * @returns {boolean}
+   */
+  offVelocityConstraint(fn) {
+    const i = this.velocityConstraintCallbacks.indexOf(fn);
+    if (i === -1) return false;
+    this.velocityConstraintCallbacks.splice(i, 1);
+    return true;
+  }
+
+  /**
+   * @param {function(number): void} fn
+   * @returns {boolean} true when it was registered
+   */
+  offSubstep(fn) {
+    const i = this.substepCallbacks.indexOf(fn);
+    if (i === -1) return false;
+    this.substepCallbacks.splice(i, 1);
+    return true;
   }
 
   /**
@@ -1880,6 +1955,11 @@ export class CollisionWorld {
     const bodies = this.bodies;
     const n = bodies.length;
 
+    // Controladores primeiro: eles leem a velocidade atual e escrevem forcas e
+    // impulsos que este mesmo substep vai integrar.
+    const callbacks = this.substepCallbacks;
+    for (let i = 0, cn = callbacks.length; i < cn; i++) callbacks[i](dt);
+
     // Fluid forces are applied before integration so buoyancy, gravity and any
     // user force are summed into the same acceleration. Pushing the velocity
     // around afterwards instead would let a body sink through the surface for a
@@ -1931,6 +2011,10 @@ export class CollisionWorld {
       if (body.enabled === false) continue;
       body.integrateVelocity(dt, this.gravity);
     }
+
+    // Restricoes de velocidade, agora que a gravidade ja entrou.
+    const constraints = this.velocityConstraintCallbacks;
+    for (let i = 0, cn = constraints.length; i < cn; i++) constraints[i](dt);
 
     this._contactCount = 0;
     this.stats.narrowPhaseTests = 0;
