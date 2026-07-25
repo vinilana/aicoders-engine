@@ -126,18 +126,57 @@ async function main() {
     const floaters = await page.evaluate(`(() => {
       const d = globalThis.aicodersDemo;
       const water = d.waterVolume;
+
+      // Duas propriedades distintas, medidas separadamente.
+      //
+      // (1) EQUILIBRIO: e uma propriedade da agua parada. Com ondas a submersao
+      // instantanea oscila com a crista, e a media nem sequer volta para a
+      // densidade — a forca satura quando o corpo esta submerso mas zera quando
+      // ele sai da agua, e essa assimetria faz um objeto em mar picado flutuar
+      // mais fundo. Isso e fisica real, nao erro; so nao e o que "densidade
+      // define a linha d'agua" quer dizer.
+      const amplitude = water.waveAmplitude;
+      water.waveAmplitude = 0;
       for (let i = 0; i < 1800; i++) d.collisionWorld.step(1 / 60);
-      return d.floaters.map((f) => ({
-        density: f.density,
-        submersion: water.bodySubmergedFraction(f.body),
-        y: f.body.position.y,
-        sleeping: f.body.sleeping,
-        shape: f.body.shape,
-      }));
+      const settled = d.floaters.map((f) => water.bodySubmergedFraction(f.body));
+
+      // (2) RESPOSTA A ONDA: com as ondas de volta, a superficie tem que se
+      // mexer e os corpos tem que acompanhar.
+      water.waveAmplitude = amplitude;
+      const probeX = (water.aabb.min.x + water.aabb.max.x) / 2;
+      const probeZ = (water.aabb.min.z + water.aabb.max.z) / 2;
+      let hMin = Infinity, hMax = -Infinity;
+      const yMin = d.floaters.map(() => Infinity);
+      const yMax = d.floaters.map(() => -Infinity);
+      for (let k = 0; k < 240; k++) {
+        d.collisionWorld.step(1 / 60);
+        const h = water.surfaceHeightAt(probeX, probeZ);
+        if (h < hMin) hMin = h;
+        if (h > hMax) hMax = h;
+        for (let i = 0; i < d.floaters.length; i++) {
+          const y = d.floaters[i].body.position.y;
+          if (y < yMin[i]) yMin[i] = y;
+          if (y > yMax[i]) yMax[i] = y;
+        }
+      }
+
+      return {
+        bodies: d.floaters.map((f, i) => ({
+          density: f.density,
+          submersion: settled[i],
+          y: f.body.position.y,
+          bob: yMax[i] - yMin[i],
+          shape: f.body.shape,
+        })),
+        waveTravel: hMax - hMin,
+        amplitude: amplitude,
+      };
     })()`);
 
     let worst = 0;
-    for (const f of floaters) {
+    let maxBob = 0;
+    for (const f of floaters.bodies) {
+      if (f.bob > maxBob) maxBob = f.bob;
       const err = Math.abs(f.submersion - f.density);
       if (err > worst) worst = err;
       if (verbose) {
@@ -145,15 +184,20 @@ async function main() {
           f.submersion.toFixed(2) + '  (' + f.shape + ', y=' + f.y.toFixed(2) + ')');
       }
     }
-    check('submersao segue a densidade em todos os corpos', worst < 0.14,
-      'maior erro ' + worst.toFixed(3) + ' em ' + floaters.length + ' corpos');
+    check('em agua parada a submersao e a densidade', worst < 0.05,
+      'maior erro ' + worst.toFixed(3) + ' em ' + floaters.bodies.length + ' corpos');
     check('corpos leves ficam mais para fora que os pesados',
-      floaters[0].submersion < floaters[3].submersion,
-      'd=0.35 -> ' + floaters[0].submersion.toFixed(2) +
-      ' | d=0.85 -> ' + floaters[3].submersion.toFixed(2));
+      floaters.bodies[0].submersion < floaters.bodies[3].submersion,
+      'd=0.35 -> ' + floaters.bodies[0].submersion.toFixed(2) +
+      ' | d=0.85 -> ' + floaters.bodies[3].submersion.toFixed(2));
     check('nenhum corpo afundou ate o fundo',
-      floaters.every((f) => f.y > -6), 'menor y=' +
-      Math.min.apply(null, floaters.map((f) => f.y)).toFixed(2));
+      floaters.bodies.every((f) => f.y > -6), 'menor y=' +
+      Math.min.apply(null, floaters.bodies.map((f) => f.y)).toFixed(2));
+    check('a superficie tem ondas de verdade', floaters.waveTravel > floaters.amplitude,
+      'a superficie varia ' + floaters.waveTravel.toFixed(3) +
+      ' m (amplitude ' + floaters.amplitude + ')');
+    check('os corpos balancam com a onda', maxBob > 0.04,
+      'maior balanco ' + maxBob.toFixed(3) + ' m');
 
     // --- 4. nado
     console.log('\n4. Nado');
@@ -225,8 +269,29 @@ async function main() {
       input.captureMode = 'off';
       const whenOff = probe('Space');
 
+      // Com o teclado travado a lista reservada encolhe para so o Esc.
+      input.captureMode = 'always';
+      input.keyboardLocked = true;
+      const locked = {
+        ctrlW: probe('KeyW', { ctrlKey: true }),
+        ctrlT: probe('KeyT', { ctrlKey: true }),
+        f11: probe('F11'),
+        escape: probe('Escape'),
+      };
+      input.keyboardLocked = false;
+
+      // captureAllShortcuts engole qualquer combo nao reservado.
+      input.captureAllShortcuts = true;
+      const aggressive = {
+        ctrlY: probe('KeyY', { ctrlKey: true }),
+        ctrlW: probe('KeyW', { ctrlKey: true }),
+      };
+      input.captureAllShortcuts = false;
+
       input.captureMode = 'pointerlock';
-      return { captured, reserved, whenOff, mode: input.captureMode };
+      return { captured, reserved, whenOff, locked, aggressive,
+               hasKeyboardLock: typeof input.canLockKeyboard === 'function',
+               hasGameMode: typeof input.enterGameMode === 'function' };
     })()`);
 
     check('captura Space/Tab/Ctrl+S/Ctrl+F//',
@@ -236,6 +301,16 @@ async function main() {
       !keys.reserved.escape && !keys.reserved.f5 && !keys.reserved.f12 &&
       !keys.reserved.ctrlW && !keys.reserved.ctrlT);
     check('modo off nao captura nada', keys.whenOff === false);
+    check('com keyboard lock captura Ctrl+W/Ctrl+T/F11',
+      keys.locked.ctrlW && keys.locked.ctrlT && keys.locked.f11);
+    check('com keyboard lock Esc continua livre (saida do usuario)',
+      keys.locked.escape === false);
+    check('captureAllShortcuts engole combos nao listados',
+      keys.aggressive.ctrlY === true);
+    check('captureAllShortcuts respeita a lista reservada',
+      keys.aggressive.ctrlW === false);
+    check('API de modo de jogo existe',
+      keys.hasKeyboardLock === true && keys.hasGameMode === true);
 
     // --- screenshot do lago
     await page.evaluate(`(() => {

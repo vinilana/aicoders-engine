@@ -48,7 +48,7 @@ import { DirectionalLight, PointLight } from '../src/scene/Light.js';
 
 import {
   createTerrain, createIcosphere, createCone, createCylinder, createSphere,
-  createCapsule, createTorusKnot, createBox
+  createCapsule, createTorusKnot, createBox, createDisc
 } from '../src/geometry/Primitives.js';
 import {
   fbm, noiseTexture, noiseHeightField, normalMapFromHeight, uvGridTexture
@@ -58,6 +58,7 @@ import { Geometry } from '../src/render/Geometry.js';
 import { StandardMaterial } from '../src/render/materials/StandardMaterial.js';
 import { UnlitMaterial } from '../src/render/materials/UnlitMaterial.js';
 import { SkyMaterial } from '../src/render/materials/SkyMaterial.js';
+import { WaterMaterial } from '../src/render/materials/WaterMaterial.js';
 
 import { KeyframeTrack } from '../src/animation/KeyframeTrack.js';
 import { AnimationClip } from '../src/animation/AnimationClip.js';
@@ -718,6 +719,8 @@ export class Demo {
     this.waterVolume = null;
     /** @type {Mesh|null} */
     this.waterSurface = null;
+    /** @type {WaterMaterial|null} */
+    this.waterMaterial = null;
     /** @type {Array<{body: RigidBody, mesh: Mesh, density: number}>} */
     this.floaters = [];
     /** @type {number} Colisores estaticos registrados. */
@@ -732,7 +735,7 @@ export class Demo {
     this.capsule = null;
     this.characterBones = null;
     this.characterPhase = 0;
-    this.bloomIntensity = 0.5;
+    this.bloomIntensity = 0.18;
     this.heroRoot = null;
     this.character = null;
     this.characterRoot = null;
@@ -1000,6 +1003,12 @@ export class Demo {
     this.textures.rockColor = noiseTexture(gl, 256, 4, { frequency: 5, ridged: true });
     this.textures.rockNormal = normalMapFromHeight(gl, noiseHeightField(256, 7, 4, 11.5), 256, 3.0);
 
+    // Foliage: high frequency, ridged breakup so a canopy reads as clumps of
+    // leaves instead of a flat painted cone. Without a map at all — which is
+    // what this was — the instance colour is the only variation there is.
+    this.textures.foliageColor = noiseTexture(gl, 256, 5, { frequency: 13, ridged: true });
+    this.textures.foliageNormal = normalMapFromHeight(gl, noiseHeightField(256, 15, 5, 9.0), 256, 2.2);
+
     // UV calibration grid for the capsule, so the UV pipeline is visible.
     this.textures.uvGrid = uvGridTexture(gl, 512, { cells: 8 });
   }
@@ -1184,9 +1193,15 @@ export class Demo {
     const foliageMaterial = new StandardMaterial({
       name: 'Foliage',
       baseColor: new Color(1, 1, 1),
-      roughness: 0.96,
+      roughness: 0.88,
       metallic: 0.0
     });
+    foliageMaterial.baseColorMap = this.textures.foliageColor;
+    foliageMaterial.normalMap = this.textures.foliageNormal;
+    foliageMaterial.normalScale = 0.8;
+    // Canopies are lit from every direction by bounce; a touch of double sided
+    // shading keeps the shaded half from going flat black.
+    foliageMaterial.side = 'double';
 
     const trunkMaterial = new StandardMaterial({
       name: 'Trunks',
@@ -1868,6 +1883,13 @@ export class Demo {
         linearDrag: 1.5,
         quadraticDrag: 0.85,
         angularDrag: 2.4,
+        // Ondas de verdade: o material de agua desloca a superficie com esta
+        // mesma funcao, entao a crista que voce ve e a crista que empurra os
+        // corpos. Amplitude modesta de proposito — ondas altas fazem tudo que
+        // boia balancar mais do que qualquer lago real.
+        waveAmplitude: 0.16,
+        waveLength: 7.5,
+        waveSpeed: 1.05,
       });
       world.addWater(this.waterVolume);
     }
@@ -1875,24 +1897,28 @@ export class Demo {
     // --- rendered surface ---------------------------------------------------
     // A disc, not a quad: the shoreline is round, and a square sheet leaves
     // corners hanging over the rim wherever the terrain dips.
-    const surface = new Mesh(
-      createCylinder(LAKE.radius * 1.02, LAKE.radius * 1.02, 0.02, 64, 1, false),
-      new StandardMaterial({
-        name: 'Water',
-        baseColor: new Color(0.055, 0.185, 0.28),
-        roughness: 0.07,
-        metallic: 0.0,
-        opacity: 0.82,
-        transparent: true,
-      })
-    );
+    const waterMaterial = new WaterMaterial({
+      deepColor: new Color(0.016, 0.075, 0.115),
+      skyColor: new Color(0.34, 0.52, 0.74),
+      opacity: 0.66,
+      fresnelPower: 4.2,
+      specular: 2.2,
+      shininess: 300,
+      rippleStrength: 0.07,
+      rippleScale: 2.2,
+    });
+    this.waterMaterial = waterMaterial;
+
+    // A ring tessellated disc, not a cylinder cap. A cap is a triangle fan: it
+    // has one vertex in the middle and the rest on the rim, so displacing it
+    // produces a radial star instead of waves.
+    const surface = new Mesh(createDisc(LAKE.radius * 1.02, 96, 28), waterMaterial);
     surface.name = 'LakeSurface';
     // createCylinder is already built around the Y axis, so its caps lie flat.
     surface.position.set(LAKE.x, LAKE.level, LAKE.z);
     surface.castShadow = false;
     surface.receiveShadow = false;
     surface.userData.noCollision = true;
-    surface.material.side = 'double';
     this.scene.add(surface);
     this.waterSurface = surface;
 
@@ -2028,7 +2054,7 @@ export class Demo {
   configurePostProcessing() {
     const post = this.renderer.post;
     if (post === null || post === undefined) return;
-    post.setBloom(true, 0.5, 1.15, 1.0);
+    post.setBloom(true, 0.18, 1.9, 1.0);
     post.setToneMapping('aces', 1.0);
     post.setFXAA(true);
     post.setSSAO(true, 0.65, 0.85);
@@ -2042,6 +2068,34 @@ export class Demo {
    * ---------------------------------------------------------------------- */
 
   /** Installs the click / pointer lock handlers on the canvas. */
+  /**
+   * Enters play mode: fullscreen, pointer lock and keyboard lock.
+   *
+   * The keyboard lock is what actually stops Ctrl+W and Ctrl+T, and the browser
+   * only grants it in fullscreen. Everything else — Ctrl+S, Ctrl+D, Space, Tab —
+   * is already suppressed by the capture list without any of this.
+   *
+   * @returns {Promise<void>}
+   */
+  async enterGameMode() {
+    const input = this.engine.input;
+    if (input === null || input === undefined) return;
+
+    input.captureAllShortcuts = true;
+    const result = await input.enterGameMode(this.dom.canvas);
+
+    if (result.keyboard === true) {
+      this.setPickInfo('Modo de jogo: atalhos do navegador desativados. ' +
+        'Segure Esc para sair.');
+    } else if (input.canLockKeyboard() === false) {
+      this.setPickInfo('Atalhos comuns bloqueados. Ctrl+W / Ctrl+T seguem ' +
+        'reservados: este navegador nao tem Keyboard Lock.');
+    } else {
+      this.setPickInfo('Atalhos comuns bloqueados. Sem tela cheia o navegador ' +
+        'nao libera Ctrl+W / Ctrl+T.');
+    }
+  }
+
   installPointerHandlers() {
     const canvas = this.dom.canvas;
     const state = this._pickPointer;
@@ -2072,7 +2126,11 @@ export class Demo {
 
       if (this.cameraMode === 'fps' && !locked) {
         // First click grabs the mouse; picking starts from the second one.
-        input.requestPointerLock();
+        //
+        // enterGameMode also goes fullscreen and takes the keyboard lock, which
+        // is the only way a page gets Ctrl+W, Ctrl+T and friends. It must run
+        // from this user gesture: all three requests require one.
+        this.enterGameMode();
         return;
       }
 
@@ -2264,12 +2322,12 @@ export class Demo {
     const hasPost = post !== null && post !== undefined;
 
     refs.bloom = check('Bloom', hasPost, (on) => {
-      if (hasPost) post.setBloom(on, this.bloomIntensity, 1.15, 1.0);
+      if (hasPost) post.setBloom(on, this.bloomIntensity, 1.9, 1.0);
     });
-    this.bloomIntensity = 0.5;
-    refs.bloomIntensity = slider('Intensidade do bloom', 0, 1.5, 0.01, 0.5, (v) => v.toFixed(2), (v) => {
+    this.bloomIntensity = 0.18;
+    refs.bloomIntensity = slider('Intensidade do bloom', 0, 1.5, 0.01, 0.18, (v) => v.toFixed(2), (v) => {
       this.bloomIntensity = v;
-      if (hasPost) post.setBloom(refs.bloom.checked, v, 1.15, 1.0);
+      if (hasPost) post.setBloom(refs.bloom.checked, v, 1.9, 1.0);
     });
     refs.ssao = check('SSAO', hasPost, (on) => {
       if (hasPost) post.setSSAO(on, 0.65, 0.85);
@@ -2560,6 +2618,13 @@ export class Demo {
       // same world but is kinematic, so it is driven separately above.
       if (this.collisionWorld !== null && this.collisionWorld !== undefined) {
         this.collisionWorld.step(dt);
+      }
+
+      // O volume avanca o proprio relogio dentro de step(); copiar dali em vez
+      // de manter um segundo contador garante que a onda desenhada e a mesma
+      // que a fisica acabou de usar.
+      if (this.waterMaterial !== null && this.waterVolume !== null) {
+        this.waterMaterial.syncFromVolume(this.waterVolume);
       }
 
       if (this._iblTimer > 0) {

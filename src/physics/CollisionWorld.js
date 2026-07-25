@@ -1887,13 +1887,33 @@ export class CollisionWorld {
     const waters = this.waters;
     if (waters.length > 0) {
       let submergedCount = 0;
+
+      // Whether any surface is actually moving decides how sleep is treated.
+      let wavesActive = false;
+      for (let w = 0, wn = waters.length; w < wn; w++) {
+        if (waters[w].enabled !== false && waters[w].waveAmplitude > 0) { wavesActive = true; break; }
+      }
+
       for (let i = 0; i < n; i++) {
         const body = bodies[i];
-        // Sleeping bodies are skipped rather than woken: a crate that has
-        // finished bobbing and come to rest at the waterline should be allowed
-        // to stay asleep, otherwise nothing floating ever stops costing time.
-        if (body.enabled === false || body.sleeping === true ||
-            body.type !== BodyType.DYNAMIC) continue;
+        if (body.enabled === false || body.type !== BodyType.DYNAMIC) continue;
+
+        if (body.sleeping === true) {
+          // Still water: let it rest. A crate that has finished bobbing and come
+          // to equilibrium should stop costing time.
+          if (wavesActive === false) continue;
+          // Moving water: it has to notice. Skipping sleepers unconditionally is
+          // what makes floating objects settle once and then sit frozen while
+          // every wave passes straight through them.
+          let touched = 0;
+          for (let w = 0, wn = waters.length; w < wn; w++) {
+            const f = waters[w].bodySubmergedFraction(body);
+            if (f > touched) touched = f;
+          }
+          if (touched <= 0.02) continue;
+          body.wake();
+        }
+
         let submersion = 0;
         for (let w = 0, wn = waters.length; w < wn; w++) {
           const applied = waters[w].applyToBody(body, this.gravity, dt);

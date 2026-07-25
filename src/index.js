@@ -149,6 +149,7 @@ export {
   createCapsule,
   createTorus,
   createTorusKnot,
+  createDisc,
   createIcosphere,
   createGridLines,
   createQuadFullscreen,

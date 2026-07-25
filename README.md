@@ -488,9 +488,54 @@ input.captureKeys(['KeyR', 'ctrl+KeyE']);
 ```
 
 Modos: `'pointerlock'` (padrao — a pagina se comporta normalmente ate voce clicar no jogo),
-`'focus'`, `'always'` e `'off'`. Esc, F5, F11, F12, Ctrl+W, Ctrl+T e Ctrl+R **nunca** sao
-capturados: parte deles o navegador nem deixa, e o resto e a saida de emergencia do usuario — um
-jogo que engole isso e um jogo do qual nao se sai.
+`'focus'`, `'always'` e `'off'`. Com `captureAllShortcuts = true` qualquer combinacao com
+modificador e engolida, nao so as listadas.
+
+**Ctrl+W, Ctrl+T e Ctrl+N sao um caso a parte.** `preventDefault` nao funciona neles, por decisao
+dos navegadores: uma pagina nao pode prender o usuario. A unica forma de recebe-los e a Keyboard
+Lock API, que o navegador so libera em tela cheia:
+
+```js
+canvas.addEventListener('click', async () => {
+  const r = await input.enterGameMode(canvas); // fullscreen + pointer lock + keyboard lock
+  console.log(r); // { fullscreen: true, pointer: true, keyboard: true }
+});
+
+input.shortcutStatus(); // o que este navegador realmente consegue bloquear
+```
+
+Disponivel em navegadores Chromium; Firefox e Safari nao implementam, e la essas teclas seguem
+reservadas — `canLockKeyboard()` diz qual e o caso. Mesmo com o lock, segurar Esc por dois
+segundos sai da tela cheia: o navegador garante isso e nenhuma pagina remove. E justamente essa
+garantia que torna aceitavel entregar Ctrl+W a uma pagina.
+
+### Superficie de agua
+
+`WaterMaterial` desloca a superficie com **a mesma funcao de onda que a fisica usa**, e
+`syncFromVolume` copia os parametros do `WaterVolume` para que a crista que voce ve seja a crista
+que empurra os corpos:
+
+```js
+import { WaterMaterial, WaterVolume, createDisc } from './src/index.js';
+
+const lago = WaterVolume.fromBox(0, -5, 0, 40, 10, 40, {
+  density: 1, waveAmplitude: 0.16, waveLength: 7.5, waveSpeed: 1.05,
+});
+world.addWater(lago);
+
+const material = new WaterMaterial({ deepColor, skyColor, opacity: 0.66 });
+scene.add(new Mesh(createDisc(20, 96, 28), material));
+
+engine.onUpdate(() => material.syncFromVolume(lago));
+```
+
+A normal e avaliada **por fragmento** a partir da forma fechada, nao interpolada dos vertices:
+interpolar amarra o sombreamento a tesselacao, e numa malha grosseira o lobulo especular cobre a
+superficie inteira de uma vez e a agua vira um lencol branco.
+
+Use `createDisc(raio, segmentos, aneis)` e nao a tampa de um cilindro: uma tampa e um leque de
+triangulos — um vertice no meio e o resto na borda —, entao deslocar aquilo vira uma estrela
+radial em vez de ondas.
 
 ```js
 const input = engine.input;

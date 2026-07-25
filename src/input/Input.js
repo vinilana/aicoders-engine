@@ -66,6 +66,17 @@ const GAME_CAPTURE_COMBOS = [
   'ctrl+KeyH', // history
   'ctrl+KeyJ', // downloads
   'ctrl+KeyE', // search bar
+  'ctrl+KeyA', // select all
+  'ctrl+KeyB', // bookmarks sidebar
+  'ctrl+KeyI', // page info
+  'ctrl+KeyK', // search
+  'ctrl+KeyM', // mute tab
+  'ctrl+Minus', 'ctrl+Equal', 'ctrl+Digit0', // zoom
+  'ctrl+Digit1', 'ctrl+Digit2', 'ctrl+Digit3', 'ctrl+Digit4',
+  'ctrl+Digit5', 'ctrl+Digit6', 'ctrl+Digit7', 'ctrl+Digit8', 'ctrl+Digit9', // tab switching
+  'alt+ArrowLeft', 'alt+ArrowRight', // history back/forward
+  'alt+KeyD', // focus address bar
+  'ctrl+shift+KeyP', // private window
 ];
 
 /**
@@ -82,6 +93,28 @@ const NEVER_CAPTURE = new Set([
   'ctrl+Tab', 'ctrl+shift+Tab', 'ctrl+KeyL',
   'alt+F4', 'alt+Tab', 'meta+KeyW', 'meta+KeyQ', 'meta+KeyR',
 ]);
+
+/**
+ * The only key still reserved once the Keyboard Lock API is active.
+ *
+ * Holding Escape for two seconds always leaves fullscreen; the browser enforces
+ * that and no page can remove it. It is the guarantee that makes handing a page
+ * Ctrl+W in the first place acceptable.
+ */
+const NEVER_CAPTURE_LOCKED = new Set(['Escape']);
+
+/**
+ * Keys `navigator.keyboard.lock()` is asked for. Requesting a specific list
+ * rather than everything keeps browser behaviour predictable and leaves keys the
+ * game does not use working normally.
+ */
+const KEYBOARD_LOCK_CODES = [
+  'KeyW', 'KeyT', 'KeyN', 'KeyR', 'KeyD', 'KeyS', 'KeyP', 'KeyF', 'KeyA',
+  'KeyL', 'KeyJ', 'KeyH', 'KeyO', 'KeyU', 'KeyE', 'KeyQ',
+  'Tab', 'F1', 'F3', 'F5', 'F6', 'F7', 'F10', 'F11', 'F12',
+  'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+  'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Digit0',
+];
 
 /** Matches gamepad button tokens: 'PadB0', 'Pad1B7'. */
 const PAD_TOKEN_RE = /^Pad(\d*)B(\d+)$/;
@@ -280,6 +313,13 @@ export class Input {
     this.neverCaptured = new Set(opts.neverCaptured || NEVER_CAPTURE);
     /** @type {number} Keys swallowed since the last reset; for debugging. */
     this.capturedCount = 0;
+    /**
+     * @type {boolean} Swallow every modifier combination while capturing,
+     * instead of only the listed ones. Still never touches `neverCaptured`.
+     */
+    this.captureAllShortcuts = opts.captureAllShortcuts === true;
+    /** @type {boolean} True while the Keyboard Lock API is held. */
+    this.keyboardLocked = false;
 
     /** @type {Set<string>} Keys currently held. */
     this._keysDown = new Set();
@@ -564,12 +604,27 @@ export class Input {
     if (this.captureMode === 'off') return false;
 
     const token = this._comboToken(e, code);
-    // The escape hatches win over everything, including an explicit request.
-    if (this.neverCaptured.has(token) || this.neverCaptured.has(code)) return false;
+
+    // With the Keyboard Lock API held the browser has handed us the reserved
+    // combinations, so the escape list shrinks to the one key it still enforces.
+    const locked = this.keyboardLocked === true;
+    const reserved = locked ? NEVER_CAPTURE_LOCKED : this.neverCaptured;
+    if (reserved.has(token) || reserved.has(code)) return false;
+
+    // Holding the lock is a statement of intent: the only reason to ask the
+    // browser for Ctrl+W is to handle it. So once it is granted, the normally
+    // reserved combinations become captured ones rather than merely allowed —
+    // otherwise they would fall through to the list checks below and reach the
+    // browser anyway, which is the opposite of what the lock was taken for.
+    if (locked && (this.neverCaptured.has(token) || this.neverCaptured.has(code))) {
+      return this.isCapturing();
+    }
+
     // Explicitly requested keys are swallowed regardless of capture mode: a game
     // that asks for Space to jump means it even before the pointer is locked.
     if (this.preventDefaultKeys.has(code)) return true;
     if (!this.isCapturing()) return false;
+    if (this.captureAllShortcuts === true) return true;
     if (token !== code) return this.capturedCombos.has(token);
     return this.capturedKeys.has(code);
   }
@@ -610,6 +665,128 @@ export class Input {
   setCaptureMode(mode) {
     this.captureMode = mode;
     return this;
+  }
+
+  /**
+   * Resolves the navigator, matching how the gamepad poll finds it so the two
+   * behave the same headless.
+   * @returns {*}
+   * @private
+   */
+  _nav() {
+    return (this.window && this.window.navigator) ||
+      (typeof globalThis !== 'undefined' ? globalThis.navigator : null);
+  }
+
+  /**
+   * Whether the Keyboard Lock API exists in this browser.
+   *
+   * It is the only way a page can receive Ctrl+W, Ctrl+T, Ctrl+N or F11 —
+   * `preventDefault` does nothing on those, by design, so that a page cannot
+   * trap the user. Chromium based browsers implement it; Firefox and Safari do
+   * not, and there they simply stay reserved.
+   *
+   * @returns {boolean}
+   */
+  canLockKeyboard() {
+    const nav = this._nav();
+    return !!(nav && nav.keyboard && typeof nav.keyboard.lock === 'function');
+  }
+
+  /**
+   * Requests the reserved key combinations from the browser.
+   *
+   * Only works while the document is in fullscreen — that is the browser's
+   * condition, not ours, and the request silently does nothing otherwise.
+   * Escape held for two seconds still exits; that cannot be removed and is what
+   * keeps this from being a way to trap someone in a page.
+   *
+   * @param {string[]} [codes] Key codes to claim; a sensible game set by default.
+   * @returns {Promise<boolean>} true once the lock is held
+   */
+  async lockKeyboard(codes) {
+    if (!this.canLockKeyboard()) return false;
+    try {
+      await this._nav().keyboard.lock(codes || KEYBOARD_LOCK_CODES);
+      this.keyboardLocked = true;
+      return true;
+    } catch (error) {
+      this.keyboardLocked = false;
+      return false;
+    }
+  }
+
+  /**
+   * Releases the keyboard lock.
+   * @returns {Input} this
+   */
+  unlockKeyboard() {
+    const nav = this._nav();
+    if (nav && nav.keyboard && typeof nav.keyboard.unlock === 'function') {
+      try { nav.keyboard.unlock(); } catch (error) { /* already released */ }
+    }
+    this.keyboardLocked = false;
+    return this;
+  }
+
+  /**
+   * Everything a game wants when the player clicks "play": fullscreen, pointer
+   * lock and the keyboard lock, in the order the browser requires.
+   *
+   * Fullscreen has to come first because the keyboard lock depends on it, and
+   * all three need a user gesture, so call this from a click handler.
+   *
+   * @param {HTMLElement} [element] Element to make fullscreen; the canvas by default.
+   * @returns {Promise<{fullscreen: boolean, pointer: boolean, keyboard: boolean}>}
+   */
+  async enterGameMode(element) {
+    const target = element || this.canvas;
+    const result = { fullscreen: false, pointer: false, keyboard: false };
+
+    if (target && typeof target.requestFullscreen === 'function') {
+      try {
+        await target.requestFullscreen({ navigationUI: 'hide' });
+        result.fullscreen = true;
+      } catch (error) { /* the user or the browser refused */ }
+    }
+
+    result.keyboard = await this.lockKeyboard();
+    result.pointer = this.requestPointerLock();
+
+    this.captureMode = 'pointerlock';
+    return result;
+  }
+
+  /**
+   * Reverses {@link enterGameMode}.
+   * @returns {Promise<void>}
+   */
+  async exitGameMode() {
+    this.unlockKeyboard();
+    this.exitPointerLock();
+    const doc = this.document;
+    if (doc && doc.fullscreenElement && typeof doc.exitFullscreen === 'function') {
+      try { await doc.exitFullscreen(); } catch (error) { /* already out */ }
+    }
+  }
+
+  /**
+   * What the current environment can actually suppress, so a game can tell the
+   * player the truth instead of guessing.
+   * @returns {{pointerLock: boolean, keyboardLock: boolean, locked: boolean,
+   *   fullscreen: boolean, reserved: string[]}}
+   */
+  shortcutStatus() {
+    const doc = this.document;
+    const locked = this.keyboardLocked === true;
+    return {
+      pointerLock: this.pointerLocked === true,
+      keyboardLock: this.canLockKeyboard(),
+      locked: locked,
+      fullscreen: !!(doc && doc.fullscreenElement),
+      // What still reaches the browser no matter what the page does.
+      reserved: locked ? ['Escape (segurar)'] : Array.from(this.neverCaptured),
+    };
   }
 
   /**

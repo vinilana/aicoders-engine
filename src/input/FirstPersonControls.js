@@ -87,6 +87,11 @@ export class FirstPersonControls {
     this.gravity = opts.gravity !== undefined ? opts.gravity : -24;
     /** @type {number} Vertical launch speed. */
     this.jumpSpeed = opts.jumpSpeed !== undefined ? opts.jumpSpeed : 7;
+    /**
+     * @type {number} Vertical speed requested while swimming, in m/s. Applied
+     * only when the attached controller reports `swimming`.
+     */
+    this.swimVerticalSpeed = opts.swimVerticalSpeed !== undefined ? opts.swimVerticalSpeed : 3.6;
     /** @type {number} Floor height for the built-in walk integrator. */
     this.groundHeight = opts.groundHeight !== undefined ? opts.groundHeight : 0;
 
@@ -240,10 +245,11 @@ export class FirstPersonControls {
       if (input.isKeyDown(keys.back)) out.z -= 1;
       if (input.isKeyDown(keys.right)) out.x += 1;
       if (input.isKeyDown(keys.left)) out.x -= 1;
-      if (this.fly) {
-        if (input.isKeyDown(keys.up)) out.y += 1;
-        if (input.isKeyDown(keys.down)) out.y -= 1;
-      }
+      // Read the vertical intent unconditionally. Flying uses it directly, and
+      // swimming needs it too: in water the up axis belongs to the player, not
+      // to gravity. Walking simply ignores it.
+      if (input.isKeyDown(keys.up)) out.y += 1;
+      if (input.isKeyDown(keys.down)) out.y -= 1;
     }
     if (typeof input.getGamepadAxis === 'function') {
       const gx = input.getGamepadAxis(this.gamepadIndex, 0);
@@ -353,7 +359,14 @@ export class FirstPersonControls {
     } else if (this.controller) {
       // The character controller owns gravity and collision; hand it the desired
       // horizontal velocity plus an impulse on the frame the jump is requested.
-      this.velocity.y = (grounded && this._readJump()) ? this.jumpSpeed : 0;
+      if (this.controller.swimming === true) {
+        // Swimming: the vertical axis is an input, not a consequence. Zeroing it
+        // here — which is right on land, where gravity owns Y — is exactly what
+        // makes a swimmer unable to dive or surface under their own power.
+        this.velocity.y = _move.y * this.swimVerticalSpeed;
+      } else {
+        this.velocity.y = (grounded && this._readJump()) ? this.jumpSpeed : 0;
+      }
       this.controller.move(this.velocity, step);
       this.isGrounded = this.controller.isGrounded !== false;
       const p = this.controller.position;

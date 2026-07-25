@@ -344,6 +344,92 @@ export function createSphere(radius = 0.5, widthSegments = 32, heightSegments = 
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Creates a horizontal disc on the XZ plane facing +Y, subdivided into rings.
+ *
+ * Not the same thing as a cylinder cap. A cap is a triangle fan — one vertex in
+ * the middle, the rest on the rim — which is fine for flat shading and useless
+ * the moment anything displaces it: waves on a fan become a radial star. The
+ * rings here give the interior the vertices a displacement needs, and keep the
+ * triangles roughly even in size from centre to edge.
+ *
+ * @param {number} [radius=1]
+ * @param {number} [segments=32] Subdivisions around the circumference.
+ * @param {number} [rings=8] Subdivisions from the centre to the rim.
+ * @returns {Geometry}
+ */
+export function createDisc(radius = 1, segments = 32, rings = 8) {
+  const seg = Math.max(3, Math.floor(segments));
+  const ring = Math.max(1, Math.floor(rings));
+
+  const vertexCount = 1 + seg * ring;
+  const positions = new Float32Array(vertexCount * 3);
+  const normals = new Float32Array(vertexCount * 3);
+  const uvs = new Float32Array(vertexCount * 2);
+
+  // Centre vertex.
+  positions[0] = 0; positions[1] = 0; positions[2] = 0;
+  normals[0] = 0; normals[1] = 1; normals[2] = 0;
+  uvs[0] = 0.5; uvs[1] = 0.5;
+
+  let v = 1;
+  for (let r = 1; r <= ring; r++) {
+    // Square root spacing keeps the ring areas equal, so triangles stay a
+    // similar size instead of bunching up at the centre.
+    const t = Math.sqrt(r / ring);
+    const rr = t * radius;
+    for (let s = 0; s < seg; s++) {
+      const angle = (s / seg) * Math.PI * 2;
+      const x = Math.cos(angle) * rr;
+      const z = Math.sin(angle) * rr;
+      positions[v * 3] = x;
+      positions[v * 3 + 1] = 0;
+      positions[v * 3 + 2] = z;
+      normals[v * 3] = 0;
+      normals[v * 3 + 1] = 1;
+      normals[v * 3 + 2] = 0;
+      uvs[v * 2] = (x / radius) * 0.5 + 0.5;
+      uvs[v * 2 + 1] = (z / radius) * 0.5 + 0.5;
+      v++;
+    }
+  }
+
+  const triangleCount = seg + seg * (ring - 1) * 2;
+  const indices = new Uint32Array(triangleCount * 3);
+  let i = 0;
+
+  // Inner fan around the centre.
+  for (let s = 0; s < seg; s++) {
+    const a = 1 + s;
+    const b = 1 + ((s + 1) % seg);
+    indices[i++] = 0; indices[i++] = b; indices[i++] = a;
+  }
+
+  // Quads between successive rings.
+  for (let r = 0; r < ring - 1; r++) {
+    const inner = 1 + r * seg;
+    const outer = inner + seg;
+    for (let s = 0; s < seg; s++) {
+      const s1 = (s + 1) % seg;
+      const a = inner + s;
+      const b = inner + s1;
+      const c = outer + s;
+      const d = outer + s1;
+      indices[i++] = a; indices[i++] = d; indices[i++] = c;
+      indices[i++] = a; indices[i++] = b; indices[i++] = d;
+    }
+  }
+
+  const geometry = new Geometry();
+  geometry.setAttribute('aPosition', positions, 3);
+  geometry.setAttribute('aNormal', normals, 3);
+  geometry.setAttribute('aUV0', uvs, 2);
+  geometry.setIndex(indices);
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+/**
  * Creates a subdivided plane on the XY axes facing +Z.
  * @param {number} [width]
  * @param {number} [height]
