@@ -1,0 +1,198 @@
+/* Voxel Core — HUD. Deliberately minimal: this is a technical base, not a game
+   UI. Everything here is a developer affordance (debug readout, crosshair,
+   key legend) rather than gameplay chrome. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a0d12;
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  color: #e8eef6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#viewport {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+#hud.hidden { opacity: 0; }
+
+/* ------------------------------------------------------------ debug panel */
+
+#debug {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  min-width: 290px;
+  padding: 10px 12px;
+  background: rgba(10, 14, 20, 0.72);
+  border: 1px solid rgba(150, 190, 240, 0.16);
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.65;
+  backdrop-filter: blur(6px);
+}
+
+#debug .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+#debug .row span { color: #8fa6c0; }
+#debug .row b { color: #dbe7f5; font-weight: 600; }
+
+/* -------------------------------------------------------------- crosshair */
+
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  /* Difference blending keeps the crosshair legible on any background. */
+  mix-blend-mode: difference;
+}
+
+#crosshair::before,
+#crosshair::after {
+  content: "";
+  position: absolute;
+  background: #ffffff;
+}
+
+#crosshair::before {
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+
+#crosshair::after {
+  top: 50%;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  transform: translateY(-50%);
+}
+
+/* ----------------------------------------------------------------- bottom */
+
+#bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#block-chip {
+  padding: 6px 14px;
+  background: rgba(10, 14, 20, 0.72);
+  border: 1px solid rgba(150, 190, 240, 0.18);
+  border-radius: 999px;
+  font-size: 12px;
+  color: #8fa6c0;
+}
+
+#block-chip b { color: #9fe08a; }
+
+#keys {
+  max-width: 780px;
+  text-align: center;
+  font-size: 10.5px;
+  line-height: 1.9;
+  color: rgba(200, 216, 232, 0.5);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+#keys b { color: rgba(226, 238, 250, 0.86); font-weight: 600; }
+
+/* --------------------------------------------------------- overlay screens */
+
+#loading, #fatal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 50% 40%, #16202e 0%, #080b10 70%);
+  z-index: 10;
+  transition: opacity 400ms ease;
+}
+
+#fatal { display: none; }
+
+#loading.done { opacity: 0; }
+
+#loading .box, #fatal .box {
+  text-align: center;
+  max-width: 460px;
+  padding: 0 24px;
+}
+
+#loading h1, #fatal h1 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+#fatal h1 { color: #ff8f7a; }
+
+#loading p, #fatal p {
+  font-size: 13px;
+  color: #8fa6c0;
+  margin-bottom: 18px;
+}
+
+#loading .bar {
+  height: 3px;
+  background: rgba(140, 180, 230, 0.16);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+#loading .bar i {
+  display: block;
+  height: 100%;
+  width: 4%;
+  background: linear-gradient(90deg, #4f8fd6, #9fe08a);
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+
+#loading small, #fatal small {
+  font-size: 11px;
+  line-height: 1.7;
+  color: rgba(143, 166, 192, 0.7);
+  display: block;
+}
+
+#fatal code {
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #cfe0f2;
+}

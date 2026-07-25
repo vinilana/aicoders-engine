@@ -32,13 +32,13 @@ import { execFileSync } from 'node:child_process';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Directories scanned for module sources. */
-const SCAN_DIRS = ['src', 'examples', 'tools'];
+const SCAN_DIRS = ['src', 'examples', 'tools', 'games'];
 
 /** File extensions treated as ES modules. */
 const MODULE_EXT = new Set(['.js', '.mjs']);
 
 /** Directories whose files must use the strict `.js`-only rule from the contract. */
-const STRICT_JS_DIRS = ['src', 'examples'];
+const STRICT_JS_DIRS = ['src', 'examples', 'games'];
 
 /** Directories ignored while walking. */
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.cache']);

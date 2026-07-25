@@ -149,6 +149,23 @@ export class ShaderMaterial extends Material {
    * @returns {Object} Program
    */
   getProgram(shaderLib, defines) {
+    this.ensureRegistered(shaderLib);
+    return super.getProgram(shaderLib, defines);
+  }
+
+  /**
+   * Publishes this material's sources into a library if they are not there yet.
+   *
+   * Kept separate from `getProgram` because the renderer checks whether a shader
+   * name is known *before* it asks the material for a program. Without a hook it
+   * can call first, a custom material could never register itself and would be
+   * skipped as "shader not registered".
+   *
+   * @param {Object} shaderLib
+   * @returns {boolean} true when the library knows this shader afterwards
+   */
+  ensureRegistered(shaderLib) {
+    if (!shaderLib || typeof shaderLib.register !== 'function') return false;
     if (this._sourcesDirty || this._registeredOn !== shaderLib || !shaderLib.has(this.shaderName)) {
       shaderLib.register(this.shaderName, {
         vertex: this._vertexShader,
@@ -158,7 +175,7 @@ export class ShaderMaterial extends Material {
       this._sourcesDirty = false;
       this._registeredOn = shaderLib;
     }
-    return super.getProgram(shaderLib, defines);
+    return true;
   }
 
   /**

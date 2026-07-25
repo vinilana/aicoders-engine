@@ -1082,6 +1082,11 @@ export class Renderer {
     if (cached !== undefined) return cached.failed ? null : cached;
 
     const name = material.shaderName;
+    // A material carrying its own sources (ShaderMaterial and friends) has to be
+    // given the chance to publish them before we decide the shader is missing.
+    if (!this.shaderLib.has(name) && typeof material.ensureRegistered === 'function') {
+      material.ensureRegistered(this.shaderLib);
+    }
     if (!this.shaderLib.has(name)) {
       if (!this._missingShaders.has(name)) {
         this._missingShaders.add(name);

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>Voxel Core — AICoders Engine</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+
+  <div id="hud">
+    <div id="debug"></div>
+
+    <div id="crosshair"></div>
+
+    <div id="bottom">
+      <div id="block-chip">bloco: <b id="block-label">grass</b></div>
+      <div id="keys">
+        <b>WASD</b> mover · <b>mouse</b> olhar · <b>espaço</b> pular · <b>2x espaço</b> voar ·
+        <b>ctrl</b> agachar/descer · <b>shift</b> correr<br>
+        <b>clique esq.</b> quebrar · <b>clique dir.</b> colocar · <b>roda</b> / <b>1-9</b> trocar bloco ·
+        <b>F3</b> depuração · <b>H</b> HUD · <b>P</b> pausa · <b>N</b> ciclo dia/noite · <b>[ ]</b> distância
+      </div>
+    </div>
+  </div>
+
+  <div id="loading">
+    <div class="box">
+      <h1>Voxel Core</h1>
+      <p>gerando o mundo…</p>
+      <div class="bar"><i id="loading-bar"></i></div>
+      <small>terreno, cavernas e iluminação são calculados em workers</small>
+    </div>
+  </div>
+
+  <div id="fatal">
+    <div class="box">
+      <h1>Não foi possível iniciar</h1>
+      <p></p>
+      <small>
+        Este projeto precisa de WebGL2 e de um servidor HTTP (módulos ES não carregam via
+        <code>file://</code>). Rode <code>node tools/serve.mjs</code> na raiz do repositório
+        e abra <code>http://localhost:8080/games/voxel/</code>.
+      </small>
+    </div>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
