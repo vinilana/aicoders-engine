@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "node tools/serve.mjs",
-    "check": "node tools/test-math.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs"
+    "check": "node tools/test-math.mjs && node tools/physics-test.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs",
+    "check:browser": "node tools/browser-test.mjs && node tools/demo-water-test.mjs && node tools/voxel-test.mjs"
   }
 }

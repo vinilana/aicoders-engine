@@ -29,6 +29,7 @@
  */
 
 import { Engine } from '../src/core/Engine.js';
+import { Logger } from '../src/core/Logger.js';
 
 import { clamp, lerp, smoothstep, seededRandom, DEG2RAD } from '../src/math/MathUtils.js';
 import { Vec3 } from '../src/math/Vec3.js';
@@ -64,6 +65,8 @@ import { AnimationMixer } from '../src/animation/AnimationMixer.js';
 
 import { CollisionWorld } from '../src/physics/CollisionWorld.js';
 import { CharacterController } from '../src/physics/CharacterController.js';
+import { RigidBody, BodyShape } from '../src/physics/RigidBody.js';
+import { WaterVolume } from '../src/physics/WaterVolume.js';
 
 import { FirstPersonControls } from '../src/input/FirstPersonControls.js';
 import { OrbitControls } from '../src/input/OrbitControls.js';
@@ -90,6 +93,18 @@ export const CONFIG = {
   scatterSites: 24000,
   /** Instanced chunks per axis. */
   scatterChunks: 4,
+  /**
+   * Menor escala de instancia que vira colisor. Props minusculos ficam
+   * atravessaveis de proposito: colidir com cada tufo de mato e tecnicamente
+   * correto e horrivel de atravessar.
+   */
+  colliderMinScale: 0.85,
+  /**
+   * Teto de colisores de scatter. Os maiores props sao escolhidos primeiro:
+   * cada um baka a propria BVH (a escala e nao uniforme), entao isso e um
+   * orcamento de memoria, nao um detalhe de gosto.
+   */
+  colliderBudget: 4000,
   /** Fraction of the generated instances drawn at start up. */
   scatterDensity: 0.75,
 
@@ -269,6 +284,22 @@ const TERRAIN_FREQ = 0.0062;
  * @param {number} z World Z.
  * @returns {number} Height in world units.
  */
+/**
+ * The lake. Referenced by `terrainHeight` (which carves the basin), by the
+ * water surface mesh and by the physics `WaterVolume`, so all three cannot
+ * drift apart.
+ */
+export const LAKE = Object.freeze({
+  x: 44,
+  z: -30,
+  /** Radius of the bowl at the rim. */
+  radius: 17,
+  /** Still water level in world units. */
+  level: -1.4,
+  /** How far the floor sits below the waterline at the centre. */
+  depth: 5.2,
+});
+
 export function terrainHeight(x, z) {
   const nx = x * TERRAIN_FREQ;
   const nz = z * TERRAIN_FREQ;
@@ -287,6 +318,26 @@ export function terrainHeight(x, z) {
   const d = Math.sqrt(x * x + z * z);
   const flat = 1 - smoothstep(CONFIG.plazaRadius, CONFIG.plazaRadius * 2.1, d);
   h = lerp(h, 0.35, flat * flat);
+
+  // Carve the lake basin into the height field itself rather than dropping a
+  // water plane onto whatever the noise produced. This guarantees the bowl
+  // actually holds the volume, that its rim sits above the waterline all the
+  // way round, and that the collision proxy — built from this same function —
+  // agrees with what is drawn.
+  const lx = x - LAKE.x;
+  const lz = z - LAKE.z;
+  const ld = Math.sqrt(lx * lx + lz * lz);
+  const basin = 1 - smoothstep(LAKE.radius * 0.30, LAKE.radius, ld);
+  h = lerp(h, LAKE.level - LAKE.depth, basin * basin);
+
+  // Rim. Carving the bowl is not enough: the noise around it can perfectly well
+  // sit below the waterline, and then the lake bleeds out across the landscape
+  // as a flat sheet. This raises a ring of ground just outside the bowl above
+  // the surface, and only ever raises — `Math.max` leaves the rest of the
+  // terrain untouched.
+  const rim = smoothstep(LAKE.radius * 0.95, LAKE.radius * 1.15, ld) *
+    (1 - smoothstep(LAKE.radius * 1.4, LAKE.radius * 2.4, ld));
+  h = Math.max(h, lerp(h, LAKE.level + 1.2, rim));
 
   return h;
 }
@@ -663,6 +714,18 @@ export class Demo {
     this.ibl = null;
     this.terrainPatches = [];
     this.scatterChunks = [];
+    /** @type {WaterVolume|null} */
+    this.waterVolume = null;
+    /** @type {Mesh|null} */
+    this.waterSurface = null;
+    /** @type {Array<{body: RigidBody, mesh: Mesh, density: number}>} */
+    this.floaters = [];
+    /** @type {number} Colisores estaticos registrados. */
+    this.colliderCount = 0;
+    /** @type {Array<Object>} */
+    this.scatterColliders = [];
+    /** @type {number} Props ignorados por estourar o orcamento de colisores. */
+    this.scatterColliderSkipped = 0;
     this.scatterFilled = 0;
     this.scatterDrawn = 0;
     this.knot = null;
@@ -770,6 +833,17 @@ export class Demo {
       await nextFrame();
       this.createDebugOverlay();
       this.createControls();
+
+      // Colliders and water need the collision world, which createControls
+      // builds together with the character controller.
+      this.progress(0.93, 'Registrando colisores...');
+      await nextFrame();
+      this.createColliders();
+
+      this.progress(0.94, 'Enchendo o lago...');
+      await nextFrame();
+      this.createWater();
+
       this.configurePostProcessing();
       this.buildUI();
 
@@ -1642,6 +1716,245 @@ export class Demo {
    * @returns {Object} An object exposing `move(velocity, dt)`, `position`,
    *   `isGrounded` and `warp(x, z)`.
    */
+  /**
+   * Registers every solid object in the scene with the collision world.
+   *
+   * Until this ran the demo only collided with the terrain, so the player
+   * walked straight through the hero objects and the scattered props. The
+   * interesting half is the scatter: thousands of instances share one triangle
+   * BVH via `addStaticInstanced`, because building a BVH per instance would
+   * spend exactly the memory instancing exists to save.
+   *
+   * @returns {number} how many colliders were registered
+   */
+  createColliders() {
+    const world = this.collisionWorld;
+    if (world === null || world === undefined) return 0;
+
+    let count = 0;
+
+    // --- hero objects: real geometry, one collider each ---------------------
+    const solids = [];
+    if (this.heroRoot !== null && this.heroRoot !== undefined) {
+      this.heroRoot.traverse((node) => {
+        if (node.isMesh !== true || node.geometry === null) return;
+        // Skip the LOD levels that are not the one being drawn and the little
+        // pick markers, which are feedback rather than scenery.
+        if (node.userData !== undefined && node.userData.noCollision === true) return;
+        if (node.name.indexOf('KnotLOD') === 0 && node.name !== 'KnotLOD0') return;
+        if (node.name.indexOf('Marker') === 0) return;
+        solids.push(node);
+      });
+    }
+
+    for (let i = 0; i < solids.length; i++) {
+      const node = solids[i];
+      node.updateWorldMatrix(true);
+      try {
+        world.addStatic(node, { friction: 0.55 });
+        count++;
+      } catch (error) {
+        // A mesh without usable triangles is not fatal: log and carry on so one
+        // odd object cannot take the whole demo down.
+        Logger.warn('Demo: objeto "' + node.name + '" nao virou colisor - ' + error.message);
+      }
+    }
+
+    // --- scattered props ----------------------------------------------------
+    //
+    // Two constraints shape this. The instances carry non uniform scale (a tree
+    // is tall and thin, a rock is squashed), which rules out sharing one BVH:
+    // a collider can only map a query into shared local space when the scale is
+    // uniform, so each of these bakes its own copy. And there are tens of
+    // thousands of them.
+    //
+    // The answer is to collide against dedicated low poly proxies rather than
+    // the drawn geometry — a 32 triangle cylinder instead of the rendered trunk
+    // — and to spend a fixed budget on the largest props. A pebble you can walk
+    // through is not a bug anyone reports; a tree you can walk through is.
+    this.scatterColliders = [];
+    const buckets = this.scatterChunks;
+    if (buckets !== undefined && buckets !== null && buckets.length > 0) {
+      const proxies = {
+        trunks: this._collisionProxy('trunk'),
+        rocks: this._collisionProxy('rock'),
+      };
+
+      // Collect every candidate with its size, so the budget buys the props
+      // that matter most instead of whichever chunk happened to come first.
+      const candidates = [];
+      const m = new Mat4();
+      for (let b = 0; b < buckets.length; b++) {
+        const bucket = buckets[b];
+        for (const kind of ['trunks', 'rocks']) {
+          const mesh = bucket[kind];
+          if (mesh === null || mesh === undefined || mesh.isInstancedMesh !== true) continue;
+          for (let i = 0; i < mesh.count; i++) {
+            mesh.getMatrixAt(i, m);
+            const size = m.getMaxScaleOnAxis();
+            if (size < CONFIG.colliderMinScale) continue;
+            candidates.push({ kind: kind, size: size, matrix: m.clone() });
+          }
+        }
+      }
+
+      candidates.sort((a, b2) => b2.size - a.size);
+      const budget = Math.min(candidates.length, CONFIG.colliderBudget);
+
+      const byKind = { trunks: [], rocks: [] };
+      for (let i = 0; i < budget; i++) byKind[candidates[i].kind].push(candidates[i].matrix);
+
+      for (const kind of ['trunks', 'rocks']) {
+        if (byKind[kind].length === 0) continue;
+        const result = world.addStaticInstanced(proxies[kind], byKind[kind], { friction: 0.6 });
+        this.scatterColliders.push(result);
+        count += result.colliders.length;
+      }
+
+      this.scatterColliderSkipped = candidates.length - budget;
+    }
+
+    this.colliderCount = count;
+    return count;
+  }
+
+  /**
+   * Low poly collision proxy for a scatter kind, built once and cached.
+   *
+   * Colliding against the rendered geometry would bake a full BVH per instance;
+   * these stand-ins are a couple of dozen triangles each, which is what makes a
+   * few thousand baked colliders affordable.
+   *
+   * @param {string} kind `'trunk'` or `'rock'`.
+   * @returns {{positions: Float32Array, indices: *}}
+   * @private
+   */
+  _collisionProxy(kind) {
+    if (this._proxyCache === undefined) this._proxyCache = {};
+    if (this._proxyCache[kind] !== undefined) return this._proxyCache[kind];
+
+    // Unit sized: the instance matrix supplies the real dimensions.
+    const geometry = kind === 'trunk'
+      ? createCylinder(0.5, 0.5, 1, 8, 1, false)
+      : createIcosphere(0.5, 0);
+
+    const position = geometry.getAttribute('aPosition');
+    const index = geometry.index;
+    const proxy = {
+      positions: position.data,
+      indices: index !== null ? index.data : null,
+    };
+    this._proxyCache[kind] = proxy;
+    return proxy;
+  }
+
+  /**
+   * Builds the lake: a rendered surface, a physics fluid volume that matches it
+   * exactly, and a handful of buoyant bodies to make the behaviour visible.
+   */
+  createWater() {
+    const world = this.collisionWorld;
+
+    // --- physics volume -----------------------------------------------------
+    // The box spans the basin and stops at the still water level; buoyancy and
+    // the surface mesh therefore agree by construction.
+    if (world !== null && world !== undefined) {
+      this.waterVolume = new WaterVolume({
+        name: 'lake',
+        min: { x: LAKE.x - LAKE.radius, y: LAKE.level - LAKE.depth - 2, z: LAKE.z - LAKE.radius },
+        max: { x: LAKE.x + LAKE.radius, y: LAKE.level, z: LAKE.z + LAKE.radius },
+        surfaceY: LAKE.level,
+        density: 1,
+        linearDrag: 1.5,
+        quadraticDrag: 0.85,
+        angularDrag: 2.4,
+      });
+      world.addWater(this.waterVolume);
+    }
+
+    // --- rendered surface ---------------------------------------------------
+    // A disc, not a quad: the shoreline is round, and a square sheet leaves
+    // corners hanging over the rim wherever the terrain dips.
+    const surface = new Mesh(
+      createCylinder(LAKE.radius * 1.02, LAKE.radius * 1.02, 0.02, 64, 1, false),
+      new StandardMaterial({
+        name: 'Water',
+        baseColor: new Color(0.055, 0.185, 0.28),
+        roughness: 0.07,
+        metallic: 0.0,
+        opacity: 0.82,
+        transparent: true,
+      })
+    );
+    surface.name = 'LakeSurface';
+    // createCylinder is already built around the Y axis, so its caps lie flat.
+    surface.position.set(LAKE.x, LAKE.level, LAKE.z);
+    surface.castShadow = false;
+    surface.receiveShadow = false;
+    surface.userData.noCollision = true;
+    surface.material.side = 'double';
+    this.scene.add(surface);
+    this.waterSurface = surface;
+
+    // --- buoyant bodies -----------------------------------------------------
+    // Densities are relative to the fluid's, so each crate settles at a
+    // different, predictable waterline: 0.35 rides high, 0.85 barely floats.
+    this.floaters = [];
+    if (world === null || world === undefined) return;
+
+    const crateGeometry = createBox(1.1, 1.1, 1.1);
+    const buoyGeometry = createSphere(0.6, 24, 16);
+    const densities = [0.35, 0.5, 0.65, 0.85, 0.45, 0.7, 0.3, 0.55];
+
+    for (let i = 0; i < densities.length; i++) {
+      const isCrate = (i % 2) === 0;
+      const angle = (i / densities.length) * Math.PI * 2;
+      const dist = LAKE.radius * 0.42;
+      const px = LAKE.x + Math.cos(angle) * dist;
+      const pz = LAKE.z + Math.sin(angle) * dist;
+
+      const hue = 0.08 + (i / densities.length) * 0.55;
+      const material = new StandardMaterial({
+        name: 'Floater_' + i,
+        baseColor: new Color().setHSL(hue, 0.62, 0.5),
+        roughness: 0.55,
+        metallic: 0.05,
+      });
+
+      const mesh = new Mesh(isCrate ? crateGeometry : buoyGeometry, material);
+      mesh.name = 'Floater_' + i;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.noCollision = true;
+      this.scene.add(mesh);
+
+      const radius = isCrate ? 0.55 : 0.6;
+      const volume = isCrate
+        ? 1.1 * 1.1 * 1.1
+        : (4 / 3) * Math.PI * radius * radius * radius;
+
+      const body = new RigidBody({
+        name: 'Floater_' + i,
+        shape: isCrate ? BodyShape.BOX : BodyShape.SPHERE,
+        radius: radius,
+        mass: densities[i] * volume,
+        restitution: 0.15,
+        friction: 0.4,
+        linearDamping: 0.02,
+        angularDamping: 0.08,
+      });
+      if (isCrate) body.setShape(BodyShape.BOX, { halfExtents: new Vec3(0.55, 0.55, 0.55) });
+      // Dropped from just above the surface: enough to show the splash and the
+      // settle, close enough that they reach equilibrium in the first second
+      // instead of pogoing while someone is trying to look at them.
+      body.position.set(px, LAKE.level + 0.8 + i * 0.22, pz);
+      body.node = mesh;
+      world.addDynamic(body);
+
+      this.floaters.push({ body: body, mesh: mesh, density: densities[i] });
+    }
+  }
+
   createCharacterController() {
     const spawn = new Vec3(0, terrainHeight(0, 30) + 0.25, 30);
     try {
@@ -2242,6 +2555,12 @@ export class Demo {
       this.updateCharacter(dt);
       this.updateHeroObjects(dt);
       this.mixer.update(dt);
+
+      // Rigid bodies: the floating crates. The character controller sweeps the
+      // same world but is kinematic, so it is driven separately above.
+      if (this.collisionWorld !== null && this.collisionWorld !== undefined) {
+        this.collisionWorld.step(dt);
+      }
 
       if (this._iblTimer > 0) {
         this._iblTimer -= dt;

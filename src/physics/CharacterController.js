@@ -38,6 +38,10 @@ import { Vec3 } from '../math/Vec3.js';
 import { DEG2RAD } from '../math/MathUtils.js';
 import { createSweepHit } from './CollisionWorld.js';
 
+/** Module scratch for the fluid query, so swimming allocates nothing. */
+const _seg0 = new Vec3();
+const _seg1 = new Vec3();
+
 /** Smallest displacement worth sweeping, in metres. */
 const MIN_MOVE = 1e-6;
 
@@ -123,6 +127,42 @@ export class CharacterController {
     this.applyGravity = options.applyGravity !== undefined ? options.applyGravity : true;
     /** @type {boolean} */
     this.enabled = true;
+
+    /* ---- swimming ------------------------------------------------------ */
+
+    /** @type {boolean} Whether fluid volumes affect this character at all. */
+    this.swimEnabled = options.swimEnabled !== undefined ? options.swimEnabled : true;
+    /**
+     * @type {number} Buoyancy relative to gravity.
+     *
+     * The character settles where `submersion * buoyancy === 1`, so this value
+     * directly picks the waterline: 1.35 leaves roughly a quarter of the capsule
+     * above the surface — head and shoulders out, which is what swimming looks
+     * like. It also sets how fast a diver returns: the net upward acceleration
+     * while fully under is `g * (buoyancy - 1)`.
+     *
+     * A real human is close to neutral (~0.98), and simulating that faithfully
+     * gives a swimmer who rises at 18 cm/s and drowns waiting. This is one of
+     * the places where the honest number is the wrong one.
+     */
+    this.buoyancy = options.buoyancy !== undefined ? options.buoyancy : 1.35;
+    /** @type {number} Exponential velocity damping while fully submerged. */
+    this.swimDrag = options.swimDrag !== undefined ? options.swimDrag : 3.2;
+    /** @type {number} Horizontal speed multiplier when fully submerged. */
+    this.swimSpeedScale = options.swimSpeedScale !== undefined ? options.swimSpeedScale : 0.55;
+    /** @type {number} Terminal sink speed, far below the in-air one. */
+    this.maxSinkSpeed = options.maxSinkSpeed !== undefined ? options.maxSinkSpeed : 4.5;
+    /** @type {number} Submersion above which the character counts as swimming. */
+    this.swimThreshold = options.swimThreshold !== undefined ? options.swimThreshold : 0.45;
+
+    /** @type {number} Fraction of the capsule below a fluid surface, 0..1. */
+    this.submersion = 0;
+    /** @type {boolean} True while any part of the capsule is in a fluid. */
+    this.inWater = false;
+    /** @type {boolean} True while deep enough to swim rather than wade. */
+    this.swimming = false;
+    /** @type {import('./WaterVolume.js').WaterVolume|null} Fluid in contact. */
+    this.water = null;
 
     /** @type {number} Gravity along `-up`, negative. */
     this.gravity = -9.81;
@@ -213,6 +253,46 @@ export class CharacterController {
    */
   getSegment(out0, out1) {
     this.getSegmentAt(this.position, out0, out1);
+  }
+
+  /**
+   * Refreshes `submersion`, `inWater`, `swimming` and `water` from the fluid
+   * volumes registered in the collision world.
+   *
+   * The capsule's submerged fraction is used rather than a simple "is the head
+   * underwater" test, so wading, swimming at the surface and diving are one
+   * continuous quantity instead of three special cases.
+   *
+   * @returns {number} the submerged fraction, 0..1
+   */
+  updateSubmersion() {
+    this.submersion = 0;
+    this.inWater = false;
+    this.swimming = false;
+    this.water = null;
+
+    if (this.swimEnabled === false) return 0;
+    const world = this.world;
+    if (world === null || world === undefined) return 0;
+    const waters = world.waters;
+    if (waters === undefined || waters === null || waters.length === 0) return 0;
+
+    this.getSegment(_seg0, _seg1);
+
+    let best = 0;
+    let bestVolume = null;
+    for (let i = 0, n = waters.length; i < n; i++) {
+      const volume = waters[i];
+      if (volume.enabled === false) continue;
+      const fraction = volume.capsuleSubmergedFraction(_seg0, _seg1, this.radius);
+      if (fraction > best) { best = fraction; bestVolume = volume; }
+    }
+
+    this.submersion = best;
+    this.inWater = best > 0;
+    this.swimming = best >= this.swimThreshold;
+    this.water = bestVolume;
+    return best;
   }
 
   /**
@@ -391,6 +471,8 @@ export class CharacterController {
     this.wallNormal.set(0, 0, 0);
     this._start.copy(this.position);
 
+    this.updateSubmersion();
+
     /* ---- velocity bookkeeping ---------------------------------------- */
     if (this.applyGravity === true) {
       let vv = this.velocity.dot(up);
@@ -415,13 +497,45 @@ export class CharacterController {
         if (len > 1e-5) this._tmp.addScaled(this._tmp2, this.slideAcceleration * dt / len);
       }
 
-      vv += this.gravity * dt;
-      // While grounded the vertical velocity is fully owned by the ground: the
-      // upward component a slide up a ramp leaves behind is an artifact of the
-      // plane projection, and keeping it would launch the character off the
-      // slope the moment it turns around ("ski jump").
-      if (wasGrounded === true && this._jumped === false) vv = -this.groundStickSpeed;
-      if (vv < -this.maxFallSpeed) vv = -this.maxFallSpeed;
+      if (this.submersion > 0) {
+        // Buoyancy scales with how much of the capsule is under the surface, so
+        // wading barely changes anything and a full dive nearly cancels gravity.
+        // With `buoyancy` slightly above 1 the residual is upward, which is what
+        // makes a swimmer drift to the waterline and stay there.
+        vv += this.gravity * (1 - this.submersion * this.buoyancy) * dt;
+
+        // In water the requested vertical speed is honoured directly: that is
+        // what swimming up and diving are, and it is why the walking branch's
+        // "gravity owns the vertical axis" rule must not apply here.
+        if (Math.abs(dvUp) > 1e-4) {
+          const responsiveness = Math.min(1, 6 * dt);
+          vv += (dvUp - vv) * responsiveness * this.submersion;
+        }
+
+        // Exponential drag: stable at any step size, unlike a linear subtraction
+        // which flips the velocity sign when dt grows.
+        const decay = Math.exp(-this.swimDrag * this.submersion * dt);
+        vv *= decay;
+        this._tmp.multiplyScalar(1 - (1 - decay) * 0.65);
+        this._tmp.multiplyScalar(1 - this.submersion * (1 - this.swimSpeedScale));
+
+        const sinkLimit = this.swimming === true ? this.maxSinkSpeed : this.maxFallSpeed;
+        if (vv < -sinkLimit) vv = -sinkLimit;
+      } else {
+        vv += this.gravity * dt;
+        // While grounded the vertical velocity is fully owned by the ground: the
+        // upward component a slide up a ramp leaves behind is an artifact of the
+        // plane projection, and keeping it would launch the character off the
+        // slope the moment it turns around ("ski jump").
+        if (wasGrounded === true && this._jumped === false) vv = -this.groundStickSpeed;
+        if (vv < -this.maxFallSpeed) vv = -this.maxFallSpeed;
+      }
+
+      // Standing on the bottom of a shallow pool still behaves like ground.
+      if (this.swimming === false && wasGrounded === true && this._jumped === false &&
+          this.submersion > 0) {
+        vv = -this.groundStickSpeed;
+      }
 
       this.velocity.set(
         this._tmp.x + up.x * vv,

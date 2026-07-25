@@ -344,6 +344,7 @@ export { Raycaster, getMeshTriangleData } from './physics/Raycaster.js';
 export { CollisionWorld, StaticCollider, createSweepHit } from './physics/CollisionWorld.js';
 export { CharacterController } from './physics/CharacterController.js';
 export { RigidBody, BodyType, BodyShape } from './physics/RigidBody.js';
+export { WaterVolume } from './physics/WaterVolume.js';
 
 /* ========================================================================== *
  * INPUT

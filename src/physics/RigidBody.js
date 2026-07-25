@@ -147,6 +147,15 @@ export class RigidBody {
     this.sleeping = false;
     /** @type {number} Seconds spent below the sleep thresholds. */
     this.sleepTimer = 0;
+
+    /**
+     * @type {number} Fraction of the body below a fluid surface, 0..1. Written
+     * by {@link CollisionWorld} every step; read it to drive splash effects,
+     * swim states or muffled audio.
+     */
+    this.submersion = 0;
+    /** @type {boolean} True while any part of the body is inside a fluid. */
+    this.inWater = false;
     /** @type {number} m/s below which the body counts as still. */
     this.sleepLinearThreshold = options.sleepLinearThreshold !== undefined ? options.sleepLinearThreshold : 0.06;
     /** @type {number} rad/s below which the body counts as still. */

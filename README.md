@@ -432,9 +432,65 @@ engine.onFixedUpdate((step) => { world.step(step); ball.syncNode(ballMesh); }, 6
 Queries diretas tambem estao disponiveis: `world.sphereCast`, `world.capsuleCast`, `world.raycast`,
 `world.overlapSphere`, `world.overlapCapsule`.
 
+**Cenas inteiras colidiveis.** Para milhares de props instanciados, `addStaticInstanced` constroi
+uma unica BVH de triangulos e da a cada instancia so a sua matriz:
+
+```js
+const matrizes = [];
+for (let i = 0; i < 5000; i++) matrizes.push(novaMatrizDeInstancia(i));
+
+const r = world.addStaticInstanced(rochaMesh, matrizes, { friction: 0.6 });
+console.log(r.colliders.length, r.shared, r.baked);
+```
+
+`shared` so e `true` quando toda matriz tem **escala uniforme**. Com escala nao uniforme o colisor
+precisa assar a propria copia em espaco de mundo (uma consulta so pode ser mapeada para o espaco
+local compartilhado quando a escala e uniforme), e `baked` conta quantas foram. Para props com
+proporcao variavel, colida contra um proxy de baixo poligono em vez da malha desenhada — e o que a
+demo faz com arvores e pedras.
+
+### Agua e empuxo
+
+`WaterVolume` e uma regiao de fluido com superficie. O que faz um objeto boiar nao e uma flag: e
+Arquimedes aplicado de verdade, entao um corpo sobe, afunda ou fica em equilibrio como consequencia
+da sua densidade em relacao a do fluido.
+
+```js
+import { WaterVolume } from './src/index.js';
+
+const lago = WaterVolume.fromBox(0, -5, 0, 40, 10, 40, { density: 1 });
+world.addWater(lago);
+
+// massa = densidade * volume -> uma caixa com 0.35 da densidade da agua
+// estabiliza com 35% do volume submerso. Ninguem escreveu esse numero.
+const volume = 1.1 * 1.1 * 1.1;
+const caixa = new RigidBody({ shape: 'box', mass: 0.35 * volume, ... });
+```
+
+Cada corpo ganha `body.submersion` (0..1) e `body.inWater` a cada passo — use para respingo, som
+abafado ou troca de estado. O `CharacterController` nada sozinho: ele expoe `submersion`, `inWater`
+e `swimming`, e o ponto de equilibrio e onde `submersion * buoyancy === 1`, ou seja `buoyancy`
+escolhe diretamente a linha d'agua (o padrao 1.35 deixa cabeca e ombros de fora).
+
+Verificado em `tools/physics-test.mjs`: densidades 0.25 / 0.5 / 0.8 estabilizam em 0.250 / 0.500 /
+0.800 de submersao.
+
 ### Input
 
 `engine.input` ja existe e ja esta plugado no canvas. Os estados de borda sao rolados no fim de cada frame.
+
+**Teclas do jogo x atalhos do browser.** Space rola a pagina, Tab tira o foco do canvas, Ctrl+S
+salva, `/` abre a busca do Firefox. A engine engole essas teclas enquanto o jogo tem o teclado:
+
+```js
+input.setCaptureMode('pointerlock'); // padrao: so com o ponteiro capturado
+input.captureKeys(['KeyR', 'ctrl+KeyE']);
+```
+
+Modos: `'pointerlock'` (padrao — a pagina se comporta normalmente ate voce clicar no jogo),
+`'focus'`, `'always'` e `'off'`. Esc, F5, F11, F12, Ctrl+W, Ctrl+T e Ctrl+R **nunca** sao
+capturados: parte deles o navegador nem deixa, e o resto e a saida de emergencia do usuario — um
+jogo que engole isso e um jogo do qual nao se sai.
 
 ```js
 const input = engine.input;

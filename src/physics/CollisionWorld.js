@@ -1047,6 +1047,15 @@ export class CollisionWorld {
     this.positionIterations = options.positionIterations !== undefined ? options.positionIterations : 3;
     /** @type {number} */
     this.subSteps = options.subSteps !== undefined ? Math.max(1, options.subSteps | 0) : 1;
+    /**
+     * @type {boolean} Grow the substep count on long frames so the solver keeps
+     * seeing steps of at most `maxSubStepTime`.
+     */
+    this.autoSubSteps = options.autoSubSteps !== undefined ? options.autoSubSteps : true;
+    /** @type {number} Longest substep the solver should ever integrate. */
+    this.maxSubStepTime = options.maxSubStepTime !== undefined ? options.maxSubStepTime : 1 / 120;
+    /** @type {number} Ceiling on the automatic count, so a stall cannot spiral. */
+    this.maxSubSteps = options.maxSubSteps !== undefined ? Math.max(1, options.maxSubSteps | 0) : 8;
     /** @type {number} */
     this.contactSlop = options.contactSlop !== undefined ? options.contactSlop : 0.005;
     /** @type {number} */
@@ -1063,7 +1072,13 @@ export class CollisionWorld {
     this.enabled = true;
 
     /** @type {{contacts:number, bodies:number, colliders:number, narrowPhaseTests:number}} */
-    this.stats = { contacts: 0, bodies: 0, colliders: 0, narrowPhaseTests: 0 };
+    this.stats = { contacts: 0, bodies: 0, colliders: 0, narrowPhaseTests: 0, submergedBodies: 0, subSteps: 1 };
+
+    /**
+     * @type {import('./WaterVolume.js').WaterVolume[]} Fluid regions. Bodies
+     * inside one receive buoyancy, drag and the current before integration.
+     */
+    this.waters = [];
 
     /** @private @type {Array<*>} Broad phase result buffer. */
     this._colliderList = [];
@@ -1140,6 +1155,104 @@ export class CollisionWorld {
     }
     this.stats.colliders = this.colliders.length;
     return collider;
+  }
+
+  /**
+   * Registers many copies of one mesh, sharing a single triangle BVH.
+   *
+   * This is what makes an instanced field of props collidable at all: building
+   * a BVH per instance would cost as much memory and time as the instancing was
+   * meant to save. The BVH is built once in local space and every collider only
+   * carries its own transform, mapping queries into that shared space.
+   *
+   * The per instance matrix must have uniform scale — a non uniform one forces
+   * the collider to bake its own world space copy, which silently defeats the
+   * sharing. Non uniform entries are baked and reported in the return value.
+   *
+   * @param {{positions:Float32Array, indices:*}|Object} source Mesh or raw triangles.
+   * @param {Mat4[]|Float32Array} matrices Per instance transforms; a Float32Array
+   *   is read as tightly packed 16-float matrices.
+   * @param {Object} [options] Passed to each {@link StaticCollider}.
+   * @returns {{colliders: StaticCollider[], shared: boolean, baked: number}}
+   */
+  addStaticInstanced(source, matrices, options = {}) {
+    const data = source.geometry !== undefined ? getMeshTriangleData(source) : source;
+    if (data === null || data === undefined || data.positions === undefined) {
+      throw new Error('CollisionWorld.addStaticInstanced: informe { positions, indices } ou uma Mesh.');
+    }
+
+    let indices = data.indices;
+    if (indices === undefined || indices === null) {
+      const vertexCount = (data.positions.length / 3) | 0;
+      indices = new Uint32Array(vertexCount);
+      for (let i = 0; i < vertexCount; i++) indices[i] = i;
+    }
+
+    // Built once, referenced by every instance.
+    let bvh = data.bvh;
+    if (bvh === undefined || bvh === null) {
+      bvh = new TriangleBVH();
+      bvh.build(data.positions, indices, 8);
+    }
+    const shared = { positions: data.positions, indices: indices, bvh: bvh };
+
+    const packed = matrices instanceof Float32Array;
+    const count = packed ? (matrices.length / 16) | 0 : matrices.length;
+    const colliders = [];
+    let baked = 0;
+
+    for (let i = 0; i < count; i++) {
+      let matrix;
+      if (packed) {
+        matrix = new Mat4();
+        matrix.fromArray(matrices, i * 16);
+      } else {
+        matrix = matrices[i];
+      }
+      const collider = new StaticCollider(shared, Object.assign({}, options, { matrix: matrix }));
+      if (collider.baked === true) baked++;
+      this._insertCollider(collider);
+      colliders.push(collider);
+    }
+
+    return { colliders: colliders, shared: baked === 0, baked: baked };
+  }
+
+  /**
+   * Adds a fluid region.
+   * @param {import('./WaterVolume.js').WaterVolume} volume
+   * @returns {import('./WaterVolume.js').WaterVolume} volume
+   */
+  addWater(volume) {
+    if (volume !== null && volume !== undefined && this.waters.indexOf(volume) === -1) {
+      this.waters.push(volume);
+    }
+    return volume;
+  }
+
+  /**
+   * @param {import('./WaterVolume.js').WaterVolume} volume
+   * @returns {boolean} true when it was registered
+   */
+  removeWater(volume) {
+    const i = this.waters.indexOf(volume);
+    if (i === -1) return false;
+    this.waters.splice(i, 1);
+    return true;
+  }
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @returns {import('./WaterVolume.js').WaterVolume|null} the fluid at a point.
+   */
+  waterAt(x, y, z) {
+    const waters = this.waters;
+    for (let i = 0, n = waters.length; i < n; i++) {
+      if (waters[i].enabled !== false && waters[i].containsPoint(x, y, z)) return waters[i];
+    }
+    return null;
   }
 
   /**
@@ -1724,9 +1837,29 @@ export class CollisionWorld {
    */
   step(dt) {
     if (this.enabled === false || dt <= 0) return this;
-    let h = dt > this.maxTimeStep ? this.maxTimeStep : dt;
-    h /= this.subSteps;
-    for (let i = 0; i < this.subSteps; i++) this._substep(h);
+    const clamped = dt > this.maxTimeStep ? this.maxTimeStep : dt;
+
+    // Substep count follows the frame, not a fixed setting.
+    //
+    // A fixed `subSteps: 1` is fine at 60 fps and dangerous at 10: the step
+    // grows until a falling body moves further in one integration than the
+    // penetration solver can recover from, and the correction impulse launches
+    // it across the map. Sizing the substep instead keeps the solver in the
+    // regime it was tuned for whatever the frame rate does, which matters
+    // because frame rate is exactly what a developer cannot control.
+    let steps = this.subSteps;
+    if (this.autoSubSteps === true && this.maxSubStepTime > 0) {
+      const needed = Math.ceil(clamped / this.maxSubStepTime);
+      if (needed > steps) steps = needed;
+      if (steps > this.maxSubSteps) steps = this.maxSubSteps;
+    }
+    const h = clamped / steps;
+    this.stats.subSteps = steps;
+    // Waves advance once per frame, not per substep: the surface must be the
+    // same height for every substep or buoyancy fights itself.
+    const waters = this.waters;
+    for (let i = 0, n = waters.length; i < n; i++) waters[i].time += dt;
+    for (let i = 0; i < steps; i++) this._substep(h);
     if (this.autoSyncNodes === true) {
       const bodies = this.bodies;
       for (let i = 0, n = bodies.length; i < n; i++) {
@@ -1746,6 +1879,32 @@ export class CollisionWorld {
   _substep(dt) {
     const bodies = this.bodies;
     const n = bodies.length;
+
+    // Fluid forces are applied before integration so buoyancy, gravity and any
+    // user force are summed into the same acceleration. Pushing the velocity
+    // around afterwards instead would let a body sink through the surface for a
+    // step before popping back, which reads as jitter at the waterline.
+    const waters = this.waters;
+    if (waters.length > 0) {
+      let submergedCount = 0;
+      for (let i = 0; i < n; i++) {
+        const body = bodies[i];
+        // Sleeping bodies are skipped rather than woken: a crate that has
+        // finished bobbing and come to rest at the waterline should be allowed
+        // to stay asleep, otherwise nothing floating ever stops costing time.
+        if (body.enabled === false || body.sleeping === true ||
+            body.type !== BodyType.DYNAMIC) continue;
+        let submersion = 0;
+        for (let w = 0, wn = waters.length; w < wn; w++) {
+          const applied = waters[w].applyToBody(body, this.gravity, dt);
+          if (applied > submersion) submersion = applied;
+        }
+        body.submersion = submersion;
+        body.inWater = submersion > 0;
+        if (submersion > 0) submergedCount++;
+      }
+      this.stats.submergedBodies = submergedCount;
+    }
 
     for (let i = 0; i < n; i++) {
       const body = bodies[i];

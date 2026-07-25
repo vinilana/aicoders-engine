@@ -34,6 +34,55 @@ const TOKEN_PAD = 2;
 /** Keys prevented by default so the page does not scroll while playing. */
 const DEFAULT_PREVENT_KEYS = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 
+/**
+ * Keys the browser acts on that a game almost always wants for itself.
+ *
+ * Every entry here does something in the page unless it is stopped: Space and
+ * the arrows scroll, Tab moves focus away from the canvas, Backspace used to
+ * navigate back, `/` and `'` open Firefox's quick find, F3 opens find again,
+ * F7 toggles caret browsing, and a bare Alt press focuses the menu bar.
+ */
+const GAME_CAPTURE_KEYS = [
+  'Space', 'Tab', 'Backspace', 'Enter',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'PageUp', 'PageDown', 'Home', 'End',
+  'Slash', 'Quote', 'F3', 'F7',
+  'AltLeft', 'AltRight',
+];
+
+/**
+ * Modifier combinations worth intercepting while playing: each one triggers a
+ * browser action that would yank the player out of the game.
+ * Format: `<modifiers>+<code>`, modifiers sorted as ctrl, shift, alt, meta.
+ */
+const GAME_CAPTURE_COMBOS = [
+  'ctrl+KeyS', // save page
+  'ctrl+KeyD', // bookmark
+  'ctrl+KeyP', // print
+  'ctrl+KeyF', // find
+  'ctrl+KeyG', // find next
+  'ctrl+KeyU', // view source
+  'ctrl+KeyO', // open file
+  'ctrl+KeyH', // history
+  'ctrl+KeyJ', // downloads
+  'ctrl+KeyE', // search bar
+];
+
+/**
+ * Combinations that are NEVER intercepted, whatever the game asks for.
+ *
+ * Two reasons. Some are reserved by the browser and cannot be blocked at all,
+ * so pretending otherwise would be a lie in the API. The rest are the user's
+ * escape hatches — closing a tab, reloading, opening devtools, leaving pointer
+ * lock — and a game that swallows those is a game people cannot get out of.
+ */
+const NEVER_CAPTURE = new Set([
+  'Escape', 'F5', 'F11', 'F12',
+  'ctrl+KeyT', 'ctrl+KeyN', 'ctrl+KeyW', 'ctrl+KeyR', 'ctrl+KeyQ',
+  'ctrl+Tab', 'ctrl+shift+Tab', 'ctrl+KeyL',
+  'alt+F4', 'alt+Tab', 'meta+KeyW', 'meta+KeyQ', 'meta+KeyR',
+]);
+
 /** Matches gamepad button tokens: 'PadB0', 'Pad1B7'. */
 const PAD_TOKEN_RE = /^Pad(\d*)B(\d+)$/;
 /** Matches mouse button tokens: 'Mouse0'. */
@@ -206,6 +255,31 @@ export class Input {
     this.gamepadDeadzone = opts.gamepadDeadzone !== undefined ? opts.gamepadDeadzone : 0.15;
     /** @type {Set<string>} Key codes whose browser default is prevented. */
     this.preventDefaultKeys = new Set(opts.preventDefaultKeys || DEFAULT_PREVENT_KEYS);
+
+    /* ---- game key capture --------------------------------------------- */
+
+    /**
+     * When the engine swallows keys that the browser would otherwise act on.
+     *
+     *   `'pointerlock'` (default) only while the pointer is captured — the safe
+     *     choice, because the page behaves completely normally until the player
+     *     clicks into the game;
+     *   `'focus'` whenever the canvas has focus;
+     *   `'always'` unconditionally;
+     *   `'off'` never.
+     *
+     * @type {string}
+     */
+    this.captureMode = opts.captureMode !== undefined ? opts.captureMode : 'pointerlock';
+
+    /** @type {Set<string>} Bare key codes to swallow while capturing. */
+    this.capturedKeys = new Set(opts.capturedKeys || GAME_CAPTURE_KEYS);
+    /** @type {Set<string>} Modifier combos to swallow, e.g. `'ctrl+KeyS'`. */
+    this.capturedCombos = new Set(opts.capturedCombos || GAME_CAPTURE_COMBOS);
+    /** @type {Set<string>} Never swallowed, whatever the above say. */
+    this.neverCaptured = new Set(opts.neverCaptured || NEVER_CAPTURE);
+    /** @type {number} Keys swallowed since the last reset; for debugging. */
+    this.capturedCount = 0;
 
     /** @type {Set<string>} Keys currently held. */
     this._keysDown = new Set();
@@ -443,6 +517,102 @@ export class Input {
   // ---------------------------------------------------------------------------
 
   /**
+   * Canonical token for a key event: `'ctrl+shift+KeyS'`, or just `'KeyS'`.
+   * Modifiers are always in the same order so lookups are a plain Set hit.
+   * @param {KeyboardEvent} e Event.
+   * @param {string} code Resolved key code.
+   * @returns {string}
+   * @private
+   */
+  _comboToken(e, code) {
+    if (!e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) return code;
+    let token = '';
+    if (e.ctrlKey) token += 'ctrl+';
+    if (e.shiftKey) token += 'shift+';
+    if (e.altKey) token += 'alt+';
+    if (e.metaKey) token += 'meta+';
+    return token + code;
+  }
+
+  /**
+   * Whether the game currently owns the keyboard.
+   * @returns {boolean}
+   */
+  isCapturing() {
+    const mode = this.captureMode;
+    if (mode === 'off') return false;
+    if (mode === 'always') return true;
+    if (mode === 'focus') {
+      const doc = this.document;
+      return this.canvas !== null && doc !== null && doc !== undefined &&
+        doc.activeElement === this.canvas;
+    }
+    return this.pointerLocked === true;
+  }
+
+  /**
+   * Decides whether a key event's browser default should be suppressed.
+   * @param {KeyboardEvent} e Event.
+   * @param {string} code Resolved key code.
+   * @returns {boolean}
+   * @private
+   */
+  _shouldCapture(e, code) {
+    // `'off'` means off, including the explicit preventDefaultKeys list: a mode
+    // that still swallowed some keys would be a trap for anyone turning it off
+    // to hand the page back to the browser.
+    if (this.captureMode === 'off') return false;
+
+    const token = this._comboToken(e, code);
+    // The escape hatches win over everything, including an explicit request.
+    if (this.neverCaptured.has(token) || this.neverCaptured.has(code)) return false;
+    // Explicitly requested keys are swallowed regardless of capture mode: a game
+    // that asks for Space to jump means it even before the pointer is locked.
+    if (this.preventDefaultKeys.has(code)) return true;
+    if (!this.isCapturing()) return false;
+    if (token !== code) return this.capturedCombos.has(token);
+    return this.capturedKeys.has(code);
+  }
+
+  /**
+   * Adds key codes or combos to the captured set.
+   * @param {string|string[]} keys `'KeyR'`, `'ctrl+KeyS'`, or an array of them.
+   * @returns {Input} this
+   */
+  captureKeys(keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (let i = 0; i < list.length; i++) {
+      const key = list[i];
+      if (key.indexOf('+') !== -1) this.capturedCombos.add(key);
+      else this.capturedKeys.add(key);
+    }
+    return this;
+  }
+
+  /**
+   * Removes key codes or combos from the captured set.
+   * @param {string|string[]} keys
+   * @returns {Input} this
+   */
+  releaseKeys(keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (let i = 0; i < list.length; i++) {
+      this.capturedCombos.delete(list[i]);
+      this.capturedKeys.delete(list[i]);
+    }
+    return this;
+  }
+
+  /**
+   * @param {string} mode `'pointerlock'`, `'focus'`, `'always'` or `'off'`.
+   * @returns {Input} this
+   */
+  setCaptureMode(mode) {
+    this.captureMode = mode;
+    return this;
+  }
+
+  /**
    * @param {KeyboardEvent} e Event.
    * @private
    */
@@ -451,7 +621,10 @@ export class Input {
     if (this.ignoreWhenTyping && this._isTextEntry(e.target)) return;
     const code = e.code || e.key;
     if (!code) return;
-    if (this.preventDefaultKeys.has(code) && typeof e.preventDefault === 'function') e.preventDefault();
+    if (this._shouldCapture(e, code) && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+      this.capturedCount++;
+    }
     if (e.repeat === true || this._keysDown.has(code)) return;
     this._keysDown.add(code);
     this._keysPressed.add(code);
@@ -465,6 +638,9 @@ export class Input {
     if (!this.enabled) return;
     const code = e.code || e.key;
     if (!code) return;
+    // Alt is acted on when RELEASED, not pressed: Firefox and Edge open the menu
+    // bar on keyup, so suppressing only keydown would still lose focus.
+    if (this._shouldCapture(e, code) && typeof e.preventDefault === 'function') e.preventDefault();
     if (this._keysDown.delete(code)) this._keysReleased.add(code);
   }
 
