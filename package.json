@@ -1,0 +1,15 @@
+{
+  "name": "aicoders-engine",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Professional WebGL2 3D engine written from scratch in pure JavaScript with zero dependencies.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "check": "node tools/test-math.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs"
+  }
+}

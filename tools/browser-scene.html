@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AICoders Engine - harness de teste em Chrome real</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #05070c;
+    color: #cfe3ff;
+    font: 12px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    overflow: hidden;
+  }
+  #viewport {
+    display: block;
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #log {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    max-width: 46ch;
+    max-height: calc(100% - 16px);
+    overflow: hidden;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: rgba(4, 8, 16, 0.72);
+    border: 1px solid rgba(120, 170, 255, 0.25);
+    white-space: pre;
+    pointer-events: none;
+  }
+  #log b { color: #9fe6a0; font-weight: 600; }
+  #log i { color: #ffb37a; font-style: normal; }
+</style>
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+  <pre id="log">iniciando...</pre>
+  <script type="module" src="./browser-scene.js"></script>
+</body>
+</html>

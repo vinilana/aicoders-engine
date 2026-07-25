@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>AICoders Engine - Demo WebGL2</title>
+<link rel="stylesheet" href="./examples/style.css">
+</head>
+<body>
+
+<canvas id="viewport"></canvas>
+
+<div id="crosshair" class="hidden"></div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- HUD: estatisticas (esquerda) e painel de controles (direita)         -->
+<!-- ------------------------------------------------------------------ -->
+<div id="hud">
+
+  <section id="stats" class="panel">
+    <header class="panel-title">
+      <span>AICoders Engine</span>
+      <span class="badge" id="stat-mode">FPS</span>
+    </header>
+    <div class="rows" id="stat-rows"></div>
+    <footer class="panel-foot" id="stat-hint">
+      <b>WASD</b> mover &middot; <b>Shift</b> correr &middot; <b>Espaco</b> pular &middot; clique captura o mouse<br>
+      <b>H</b> painel &middot; <b>P</b> pausa &middot; <b>F</b> wireframe &middot; <b>B</b> BVH &middot; <b>L</b> trava frustum &middot; <b>C</b> camera &middot; <b>R</b> spawn
+    </footer>
+  </section>
+
+  <section id="controls" class="panel">
+    <header class="panel-title">
+      <span>Controles</span>
+      <button type="button" id="controls-collapse" class="mini" title="Recolher">&minus;</button>
+    </header>
+    <div class="rows" id="control-rows"></div>
+    <footer class="panel-foot" id="pick-info">Clique na cena para marcar o ponto atingido.</footer>
+  </section>
+
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Tela de carregamento                                                 -->
+<!-- ------------------------------------------------------------------ -->
+<div id="loading">
+  <div class="boot">
+    <h1>AICoders Engine</h1>
+    <p class="sub">Engine 3D WebGL2 &mdash; JavaScript puro, zero dependencias</p>
+    <div class="bar"><div class="bar-fill" id="loading-bar"></div></div>
+    <p class="step" id="loading-step">Inicializando&hellip;</p>
+    <div class="serve-note">
+      <strong>Precisa de um servidor estatico.</strong>
+      ES Modules nao carregam via <code>file://</code>. Se esta tela nao sair daqui,
+      rode na raiz do projeto:
+      <code class="cmd">npm start</code>
+      e abra <code>http://localhost:8080/</code>.
+    </div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- Tela de erro amigavel                                                -->
+<!-- ------------------------------------------------------------------ -->
+<div id="error" class="hidden">
+  <div class="boot">
+    <h1 id="error-title">WebGL2 nao suportado</h1>
+    <p class="sub" id="error-message">
+      Este navegador ou dispositivo nao expoe um contexto WebGL2.
+    </p>
+    <pre id="error-detail"></pre>
+    <div class="serve-note">
+      <strong>O que tentar:</strong>
+      atualize o navegador (Chrome/Edge 56+, Firefox 51+, Safari 15+),
+      habilite a aceleracao por hardware nas configuracoes,
+      atualize o driver de video, ou abra a pagina em outra maquina.
+      Lembre tambem de servir os arquivos com <code class="cmd">npm start</code>.
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./examples/demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+# --- dependencies (the engine has none, but tooling scaffolding may create these) ---
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# --- build / distribution output (the engine is served straight from src/) ---
+dist/
+build/
+out/
+coverage/
+.cache/
+.tmp/
+tmp/
+
+# --- logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# --- editor / OS noise ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- local-only overrides ---
+*.local
+.env
+.env.*
+
+# --- large binary assets dropped in for local testing ---
+assets/local/
+examples/assets/local/
