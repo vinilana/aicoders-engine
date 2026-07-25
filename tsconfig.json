@@ -1,0 +1,23 @@
+{
+  "//": [
+    "Usado APENAS para gerar os .d.ts a partir do JSDoc que ja existe no codigo.",
+    "A engine nao e escrita em TypeScript e nao tem build: os tipos gerados sao",
+    "commitados em types/, entao quem consome o pacote nunca precisa do tsc.",
+    "Rode 'npm run types' depois de mexer em API publica."
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": false,
+    "outDir": "types",
+    "rootDir": "src"
+  },
+  "include": ["src/**/*.js"]
+}

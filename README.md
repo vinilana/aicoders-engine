@@ -32,6 +32,75 @@ Engine 3D WebGL2 completa, escrita do zero em JavaScript puro: sem dependencias,
 
 ---
 
+## Instalacao
+
+Tres formas de consumir, todas com o mesmo codigo de aplicacao.
+
+**npm** — com bundler (Vite, esbuild, webpack, Rollup):
+
+```bash
+npm install aicoders-engine
+```
+
+```js
+import { Engine, Mesh, StandardMaterial, createBox } from 'aicoders-engine';
+// ou por area:
+import { Vec3, Mat4 } from 'aicoders-engine/math';
+import { CollisionWorld, WaterVolume } from 'aicoders-engine/physics';
+```
+
+**Sem ferramenta nenhuma** — import map no HTML, que e como a propria demo roda:
+
+```html
+<script type="importmap">
+{ "imports": {
+    "aicoders-engine": "./node_modules/aicoders-engine/src/index.js",
+    "aicoders-engine/": "./node_modules/aicoders-engine/src/"
+} }
+</script>
+<script type="module" src="./main.js"></script>
+```
+
+**Submodulo git** — quando voce quer editar a engine junto com o jogo:
+
+```bash
+git submodule add https://github.com/vinilana/aicoders-engine.git vendor/engine
+```
+
+### Ponto de partida
+
+`templates/starter/` e um projeto minimo e funcional: cena, luz, PBR, um corpo
+rigido caindo e camera orbital. Copie a pasta e comece dali — ela vem no pacote,
+entao `cp -r node_modules/aicoders-engine/templates/starter meu-jogo` funciona.
+
+### Tipos
+
+Os `.d.ts` sao gerados do JSDoc do proprio codigo e **vao commitados** em
+`types/`, entao autocompletar e checagem funcionam em TypeScript e em JS com
+`// @ts-check` sem que voce instale ou compile nada. A engine continua sendo
+JavaScript puro; o TypeScript e um devDependency usado so por `npm run types`.
+
+### Subpaths disponiveis
+
+| Import | Conteudo |
+|---|---|
+| `aicoders-engine` | tudo (~470 exports) |
+| `aicoders-engine/math` | Vec2/3/4, Quat, Mat3/4, AABB, Ray, Frustum, Color |
+| `aicoders-engine/core` | Engine, Time, EventBus, Pool, Logger |
+| `aicoders-engine/scene` | Node3D, Scene, cameras, Mesh, luzes, LOD |
+| `aicoders-engine/render` | Renderer, materiais, texturas, shaders, pos-processamento |
+| `aicoders-engine/physics` | CollisionWorld, RigidBody, CharacterController, WaterVolume |
+| `aicoders-engine/geometry` | primitivas e texturas procedurais |
+| `aicoders-engine/spatial` | DynamicBVH, TriangleBVH |
+| `aicoders-engine/animation` | AnimationMixer, clips, tracks |
+| `aicoders-engine/loaders` | GLTFLoader, OBJLoader, AssetManager |
+| `aicoders-engine/input` | Input, OrbitControls, FirstPersonControls |
+| `aicoders-engine/audio` | AudioEngine, AudioSource |
+| `aicoders-engine/util` | Stats, utilitarios de TypedArray |
+| `aicoders-engine/src/<caminho>.js` | qualquer modulo interno, sem intermediario |
+
+---
+
 ## Comecando
 
 ```bash

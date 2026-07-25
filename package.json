@@ -2,15 +2,117 @@
   "name": "aicoders-engine",
   "version": "1.0.0",
   "type": "module",
-  "private": true,
-  "description": "Professional WebGL2 3D engine written from scratch in pure JavaScript with zero dependencies.",
+  "description": "Engine 3D WebGL2 escrita do zero em JavaScript puro. Zero dependencias de runtime, zero build: os modulos sao servidos crus ao navegador.",
   "license": "MIT",
+  "author": "Vinicius Lana",
+  "homepage": "https://github.com/vinilana/aicoders-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vinilana/aicoders-engine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vinilana/aicoders-engine/issues"
+  },
+  "keywords": [
+    "webgl2",
+    "webgl",
+    "3d",
+    "engine",
+    "game-engine",
+    "graphics",
+    "pbr",
+    "renderer",
+    "realtime",
+    "gltf",
+    "physics",
+    "voxel",
+    "zero-dependency"
+  ],
   "engines": {
     "node": ">=18.0.0"
   },
+  "main": "./src/index.js",
+  "module": "./src/index.js",
+  "types": "./types/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./math": {
+      "types": "./types/math/index.d.ts",
+      "default": "./src/math/index.js"
+    },
+    "./core": {
+      "types": "./types/core/index.d.ts",
+      "default": "./src/core/index.js"
+    },
+    "./util": {
+      "types": "./types/util/index.d.ts",
+      "default": "./src/util/index.js"
+    },
+    "./scene": {
+      "types": "./types/scene/index.d.ts",
+      "default": "./src/scene/index.js"
+    },
+    "./spatial": {
+      "types": "./types/spatial/index.d.ts",
+      "default": "./src/spatial/index.js"
+    },
+    "./geometry": {
+      "types": "./types/geometry/index.d.ts",
+      "default": "./src/geometry/index.js"
+    },
+    "./render": {
+      "types": "./types/render/index.d.ts",
+      "default": "./src/render/index.js"
+    },
+    "./animation": {
+      "types": "./types/animation/index.d.ts",
+      "default": "./src/animation/index.js"
+    },
+    "./loaders": {
+      "types": "./types/loaders/index.d.ts",
+      "default": "./src/loaders/index.js"
+    },
+    "./physics": {
+      "types": "./types/physics/index.d.ts",
+      "default": "./src/physics/index.js"
+    },
+    "./input": {
+      "types": "./types/input/index.d.ts",
+      "default": "./src/input/index.js"
+    },
+    "./audio": {
+      "types": "./types/audio/index.d.ts",
+      "default": "./src/audio/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "types",
+    "templates",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "node tools/serve.mjs",
-    "check": "node tools/test-math.mjs && node tools/physics-test.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs",
-    "check:browser": "node tools/browser-test.mjs && node tools/demo-water-test.mjs && node tools/voxel-test.mjs"
+    "check": "node tools/gen-barrels.mjs --check && node tools/test-math.mjs && node tools/physics-test.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs",
+    "check:browser": "node tools/browser-test.mjs && node tools/demo-water-test.mjs && node tools/starter-test.mjs && node tools/voxel-test.mjs",
+    "check:package": "node tools/check-package.mjs",
+    "barrels": "node tools/gen-barrels.mjs",
+    "types": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run barrels && npm run types && npm run check && npm run check:package"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

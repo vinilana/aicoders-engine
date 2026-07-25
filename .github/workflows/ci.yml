@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Verificacao (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # A engine nao tem dependencia de runtime; o unico devDependency e o
+      # TypeScript, usado so para gerar tipos. Nada disso e preciso para os
+      # testes, que rodam em Node puro.
+      - name: Verificacao estatica e headless
+        run: npm run check
+
+      - name: Validacao do pacote
+        run: npm run check:package
+
+  browser:
+    name: Chrome real (WebGL2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # O runner ja traz Chrome; o harness o encontra sozinho e cai para
+      # SwiftShader por nao haver GPU.
+      - name: Testes em navegador
+        run: npm run check:browser
+
+      - name: Guardar screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: .shots/
+          if-no-files-found: ignore
+
+  types:
+    name: Tipos em dia
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm install --no-audit --no-fund
+
+      # Regenera e falha se o resultado divergir do que esta commitado: tipos
+      # desatualizados nao quebram nenhum teste, so mentem para quem consome.
+      - name: Regenerar e comparar
+        run: |
+          npm run barrels
+          npm run types
+          if [ -n "$(git status --porcelain types src)" ]; then
+            echo "Tipos ou barris desatualizados. Rode 'npm run barrels && npm run types' e commite."
+            git --no-pager diff --stat types src
+            exit 1
+          fi

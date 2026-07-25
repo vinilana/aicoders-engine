@@ -1,0 +1,14 @@
+/**
+ * Distance fog with an optional exponential height falloff.
+ *
+ * uFogParams = (mode, near|density, far, heightFalloff)
+ *   mode 0 -> linear, fades between 'near' and 'far'
+ *   mode 1 -> exponential,        1 - exp(-density * d)
+ *   mode 2 -> exponential squared,1 - exp(-(density * d)^2)
+ * uFogColor.a caps the maximum fog opacity so distant geometry never disappears
+ * completely, and 'heightFalloff' (when > 0) attenuates the density with altitude
+ * around y = 0.
+ *
+ * Include with '#include <fog>'.
+ */
+export const fog: "\n#include <common>\n#include <lights_ubo>\n#ifndef FOG_GLSL_INCLUDED\n#define FOG_GLSL_INCLUDED\n\n#define FOG_MODE_LINEAR 0\n#define FOG_MODE_EXP    1\n#define FOG_MODE_EXP2   2\n\n/** Linear fog factor: 0 at 'near', 1 at 'far'. */\nfloat fogFactorLinear(float dist, float near, float far) {\n  return saturate((dist - near) / max(far - near, EPS));\n}\n\n/** Exponential fog factor. */\nfloat fogFactorExp(float dist, float density) {\n  return 1.0 - exp(-density * dist);\n}\n\n/** Exponential squared fog factor, the classic OpenGL EXP2 curve. */\nfloat fogFactorExp2(float dist, float density) {\n  float d = density * dist;\n  return 1.0 - exp(-d * d);\n}\n\n/**\n * Height based density scale. 'falloff' controls how quickly the fog thins out\n * above y = 0; the integral is approximated with the standard analytic form for\n * a ray of constant altitude, which is accurate enough for camera relative fog.\n */\nfloat fogHeightScale(float worldY, float falloff) {\n  if (falloff <= 0.0) return 1.0;\n  return exp(-max(worldY, 0.0) * falloff);\n}\n\n/** Fog factor in [0,1] using the values stored in the Fog uniform block. */\nfloat computeFogFactor(float viewDistance, float worldY) {\n  int mode = int(uFogParams.x + 0.5);\n  float factor;\n  if (mode == FOG_MODE_EXP) {\n    factor = fogFactorExp(viewDistance, uFogParams.y);\n  } else if (mode == FOG_MODE_EXP2) {\n    factor = fogFactorExp2(viewDistance, uFogParams.y);\n  } else {\n    factor = fogFactorLinear(viewDistance, uFogParams.y, uFogParams.z);\n  }\n  factor *= fogHeightScale(worldY, uFogParams.w);\n  return saturate(factor * max(uFogColor.a, 0.0));\n}\n\n/** Blend a shaded colour towards the fog colour. */\nvec3 applyFog(vec3 color, float viewDistance, float worldY) {\n  return mix(color, uFogColor.rgb, computeFogFactor(viewDistance, worldY));\n}\n\n/** Convenience overload taking the world position directly. */\nvec3 applyFog(vec3 color, float viewDistance, vec3 worldPos) {\n  return applyFog(color, viewDistance, worldPos.y);\n}\n\n/**\n * Fog for additive / premultiplied surfaces: instead of blending towards the fog\n * colour the contribution is simply faded out, which keeps additive particles from\n * turning into bright fog coloured blobs.\n */\nvec3 applyFogAdditive(vec3 color, float viewDistance, float worldY) {\n  return color * (1.0 - computeFogFactor(viewDistance, worldY));\n}\n\n#endif\n";

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Starter — AICoders Engine</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0e13; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #hint {
+      position: fixed; left: 12px; bottom: 12px;
+      font: 12px/1.6 ui-monospace, Menlo, Consolas, monospace;
+      color: rgba(220, 232, 246, 0.55);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+      pointer-events: none;
+    }
+    #fatal {
+      position: fixed; inset: 0; display: none;
+      align-items: center; justify-content: center; text-align: center;
+      background: #0b0e13; color: #ff8f7a; padding: 24px;
+      font: 14px/1.7 ui-monospace, Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="viewport"></canvas>
+  <div id="hint">arraste para orbitar · roda para aproximar</div>
+  <div id="fatal"><div><b>Nao foi possivel iniciar</b><br><span id="fatal-msg"></span></div></div>
+
+  <!--
+    Import map: mapeia o nome do pacote para os arquivos reais.
+
+    Assim o mesmo `import { Engine } from 'aicoders-engine'` funciona tanto aqui,
+    sem nenhuma ferramenta, quanto depois de um `npm install` com bundler — o
+    codigo do jogo nao muda.
+
+    Instalado via npm, troque os caminhos por ./node_modules/aicoders-engine/…
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "aicoders-engine": "../../src/index.js",
+      "aicoders-engine/": "../../src/"
+    }
+  }
+  </script>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

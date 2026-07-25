@@ -13,6 +13,10 @@ coverage/
 .tmp/
 tmp/
 
+# --- saida de teste e empacotamento ---
+.shots/
+*.tgz
+
 # --- logs ---
 *.log
 npm-debug.log*
