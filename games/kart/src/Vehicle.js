@@ -97,9 +97,9 @@ export class Vehicle {
     /** @type {number} */
     this.wheelRadius = 0.34;
     /** @type {number} Spring rate, in newtons per metre of compression. */
-    this.suspensionStiffness = 34000;
+    this.suspensionStiffness = 26000;
     /** @type {number} Damper rate. Under damped karts pogo; over damped skate. */
-    this.suspensionDamping = 3400;
+    this.suspensionDamping = 2700;
     /** @type {number} Hard limit on the spring force, to survive a bad landing. */
     this.suspensionMaxForce = 26000;
 
@@ -125,10 +125,12 @@ export class Vehicle {
      * flick of the wheel at top speed spins the kart instantly.
      */
     this.steerSpeedFalloff = 0.72;
+    // Aderencia e expressa por unidade de carga, entao ela acompanha a
+    // gravidade: baixar a gravidade sem recompor isto deixa o kart escorregando.
     /** @type {number} Lateral grip coefficient of a loaded tyre. */
-    this.lateralGrip = 3.4;
+    this.lateralGrip = 4.6;
     /** @type {number} Longitudinal grip, used to cap drive and brake force. */
-    this.longitudinalGrip = 2.4;
+    this.longitudinalGrip = 3.3;
     /** @type {number} Grip multiplier when off the racing surface. */
     this.offTrackGrip = 0.45;
     /** @type {number} Extra yaw damping, keeps the kart from spinning forever. */
@@ -145,7 +147,7 @@ export class Vehicle {
      */
     this.rearGripBias = 1.45;
     /** @type {number} Downforce coefficient; grows with the square of speed. */
-    this.downforce = 3.0;
+    this.downforce = 2.2;
 
     /* ---- state -------------------------------------------------------- */
 
@@ -230,10 +232,15 @@ export class Vehicle {
   update(dt) {
     const body = this.body;
 
-    // Chassis frame.
+    // Referencial do chassi.
+    //
+    // A direita e derivada, nao assumida. Num sistema destro com Y para cima e
+    // forward = +Z, a direita real e forward x up = -X. Usar +X como "direita"
+    // — o que parece obvio — inverte a direcao inteira: o jogador vira para um
+    // lado e o kart vai para o outro.
     _forward.set(0, 0, 1).applyQuat(body.quaternion);
-    _right.set(1, 0, 0).applyQuat(body.quaternion);
     _up.set(0, 1, 0).applyQuat(body.quaternion);
+    _right.crossVectors(_forward, _up).normalize();
     _down.copy(_up).negate();
 
     this.speed = body.velocity.dot(_forward);
@@ -326,7 +333,8 @@ export class Vehicle {
       } else {
         _wheelForward.copy(_forward);
       }
-      _wheelRight.crossVectors(_up, _wheelForward).normalize();
+      // Mesma convencao do chassi: forward x up.
+      _wheelRight.crossVectors(_wheelForward, _up).normalize();
 
       // Project the wheel frame onto the contact plane, so a banked corner
       // pushes the kart along the road and not into it.

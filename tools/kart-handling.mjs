@@ -30,7 +30,7 @@ function check(name, ok, detail) {
 function makeRig() {
   const track = new Track();
   const world = new CollisionWorld({
-    gravity: new Vec3(0, -16, 0),
+    gravity: new Vec3(0, -11.5, 0),
     maxSubStepTime: 1 / 180,
     maxSubSteps: 8,
   });
@@ -68,7 +68,7 @@ function makeRig() {
  */
 function makePad() {
   const world = new CollisionWorld({
-    gravity: new Vec3(0, -16, 0),
+    gravity: new Vec3(0, -11.5, 0),
     maxSubStepTime: 1 / 180,
     maxSubSteps: 8,
   });
@@ -189,6 +189,55 @@ console.log('\n2. Curva em regime permanente');
     'slip ' + total.slip.toFixed(2) + ', deriva ' + (total.drift * 57.3).toFixed(0) + ' graus');
 }
 
+/* --------------------------------------------- 2b. lado e forca g */
+
+console.log('\n2b. Sentido da direcao e forca lateral');
+{
+  const rig = makePad();
+  for (let i = 0; i < 120 * 4; i++) step(rig, 1, 0, 0, false);
+
+  // Direita do kart no instante em que a curva comeca.
+  const f0 = new Vec3(0, 0, 1).applyQuat(rig.vehicle.body.quaternion);
+  const up = new Vec3(0, 1, 0);
+  const right0 = new Vec3().crossVectors(f0, up).normalize();
+  const p0 = rig.vehicle.body.position.clone();
+
+  let maxLatG = 0;
+  const vPrev = rig.vehicle.body.velocity.clone();
+  let prev = vPrev;
+  for (let i = 0; i < 120 * 3; i++) {
+    const before = rig.vehicle.body.velocity.clone();
+    step(rig, 0.5, 0, 1, false);
+    const after = rig.vehicle.body.velocity;
+    // Aceleracao lateral: componente perpendicular ao movimento, em g.
+    const f = new Vec3(0, 0, 1).applyQuat(rig.vehicle.body.quaternion);
+    const r = new Vec3().crossVectors(f, up).normalize();
+    const dv = after.clone().sub(before);
+    const lat = Math.abs(dv.dot(r)) / DT / 9.81;
+    if (lat > maxLatG) maxLatG = lat;
+  }
+
+  const desloc = rig.vehicle.body.position.clone().sub(p0);
+  const paraDireita = desloc.dot(right0);
+
+  check('esterco positivo vira para a DIREITA do kart', paraDireita > 1.0,
+    paraDireita.toFixed(1) + ' m para a direita');
+  check('forca lateral em faixa de kart', maxLatG > 0.6 && maxLatG < 2.2,
+    maxLatG.toFixed(2) + ' g de pico');
+}
+
+{
+  // Peso aparente: quanto o solo empurra o kart para cima em relacao ao peso.
+  const rig = makePad();
+  for (let i = 0; i < 120 * 6; i++) step(rig, 1, 0, 0, false);
+  const g = 11.5;
+  const peso = rig.vehicle.body.mass * g;
+  const down = rig.vehicle.downforce * rig.vehicle.speed * rig.vehicle.speed * 0.5;
+  const razao = (peso + down) / peso;
+  check('downforce nao esmaga o kart', razao < 1.5,
+    (razao).toFixed(2) + 'x o peso a ' + rig.vehicle.speedKmh.toFixed(0) + ' km/h');
+}
+
 /* ----------------------------------------- 3. estabilidade em reta */
 
 console.log('\n3. Estabilidade em linha reta');
@@ -250,11 +299,13 @@ console.log('\n4. Volta completa com piloto simples');
     para.y = 0;
     para.normalize();
 
+    // atan2(x, z) cresce de +Z para +X. Como a direita do kart e -X, um alvo a
+    // direita produz erro NEGATIVO — o esterco e o negativo do erro de rumo.
     let rumo = Math.atan2(para.x, para.z) - Math.atan2(f.x, f.z);
     while (rumo > Math.PI) rumo -= Math.PI * 2;
     while (rumo < -Math.PI) rumo += Math.PI * 2;
 
-    const steer = Math.max(-1, Math.min(1, rumo * 2.2));
+    const steer = Math.max(-1, Math.min(1, -rumo * 2.2));
     // solta o acelerador quando a curva aperta
     const gas = Math.max(0.35, 1 - Math.abs(steer) * 0.8);
     step(rig, gas, 0, steer, false);
