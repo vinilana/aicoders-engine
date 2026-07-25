@@ -21,6 +21,23 @@ const verbose = args.includes('--verbose');
 const shotsIndex = args.indexOf('--shots');
 const SHOTS = shotsIndex >= 0 ? args[shotsIndex + 1] : join(ROOT, '.shots');
 
+function flag(name, fallback) {
+  const i = args.indexOf('--' + name);
+  if (i < 0) return fallback;
+  const v = Number(args[i + 1]);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+/** Raio de carregamento; 8 e o padrao do jogo. */
+const DISTANCE = flag('distance', 5);
+/** Segundos de simulacao apos o mundo aparecer. */
+const SETTLE_SECONDS = flag('seconds', 12);
+/**
+ * Move o jogador durante o teste. Streaming e descarregamento de chunk so sao
+ * exercitados quando alguem anda; um teste parado nunca chega nesse codigo.
+ */
+const WALK = args.includes('--walk');
+
 const PORT = 8231;
 
 async function startServer() {
@@ -62,7 +79,7 @@ async function main() {
 
     console.log('\n=== VOXEL CORE — Chrome real ===\n');
 
-    await page.navigate('http://127.0.0.1:' + PORT + '/games/voxel/?seed=1337&distance=5');
+    await page.navigate('http://127.0.0.1:' + PORT + '/games/voxel/?seed=1337&distance=' + DISTANCE);
 
     // O mundo precisa de tempo: geracao + luz + meshing, tudo em SwiftShader.
     await page.waitForFunction(
@@ -72,8 +89,31 @@ async function main() {
     );
     console.log('  mundo carregado.\n');
 
-    // Deixa a simulacao rodar um pouco para assentar luz e malhas.
-    await sleep(12000);
+    // Deixa a simulacao rodar para assentar luz e malhas.
+    if (WALK) {
+      // Anda em linha reta para forcar carga e descarga continua de chunks —
+      // o caminho que uma sessao real percorre e um teste parado nunca toca.
+      await page.evaluate(`(() => {
+        const g = window.game;
+        g.player.flying = true;
+        g._walkTimer = setInterval(() => {
+          g.player.body.x += 6;
+          g.player.body.z += 2;
+        }, 250);
+        window.__walkErrors = [];
+        window.addEventListener('error', (e) => window.__walkErrors.push(String(e.message)));
+        window.addEventListener('unhandledrejection', (e) => window.__walkErrors.push('rejection: ' + String(e.reason)));
+      })()`);
+    }
+    for (let elapsed = 0; elapsed < SETTLE_SECONDS * 1000; elapsed += 5000) {
+      await sleep(Math.min(5000, SETTLE_SECONDS * 1000 - elapsed));
+      if (verbose) {
+        const beat = await page.evaluate(
+          'JSON.stringify({c: game.world.chunkCount, s: game.chunks.stats.sectionsDrawn, e: game.chunks.lastError})');
+        process.stdout.write('  [' + ((elapsed + 5000) / 1000) + 's] ' + beat + '\n');
+      }
+    }
+    if (WALK) await page.evaluate('clearInterval(window.game._walkTimer)');
 
     const report = await page.evaluate(`(() => {
       const g = window.game;
@@ -122,6 +162,12 @@ async function main() {
         pendingGenerate: g.chunks.stats.pendingGenerate,
         fps: Math.round(g.engine.time.fps),
         error: g.chunks.lastError,
+        dirtySections: w.dirtySections.size,
+        meshingJobs: g.chunks.stats.meshing,
+        pendingUpload: g.chunks.stats.pendingUpload,
+        walkErrors: window.__walkErrors || [],
+        jsHeapMB: (performance.memory && performance.memory.usedJSHeapSize)
+          ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1,
       };
     })()`);
 
@@ -138,6 +184,8 @@ async function main() {
       report.placedOk + ' -> ' + report.afterPlace + ' (orig ' + report.original + ')');
     line('raycast acertou', report.raycastHit);
     line('fila de luz', report.lightQueue);
+    line('backlog de meshing', report.dirtySections + ' sujas, ' + report.meshingJobs +
+      ' em voo, ' + report.pendingUpload + ' p/ upload');
     line('fps (SwiftShader)', report.fps);
 
     // --- validacao de pixels
@@ -206,6 +254,7 @@ async function main() {
       ['sem erro de GL', pixels.glError === 0],
       ['sem excecao', exceptions.length === 0],
       ['sem erro de console', consoleErrors.length === 0],
+      ['sem erro durante a caminhada', (report.walkErrors || []).length === 0],
     ];
 
     for (const [label, ok] of checks) {

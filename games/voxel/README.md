@@ -123,8 +123,13 @@ skylight cheio na superfície e bloqueado no fundo, edição de bloco, jogador
 assentado no solo, tela não preta e com variância, sem erro de GL, sem exceção,
 sem erro de console. Salva um screenshot para inspeção visual.
 
-Última execução: 97 chunks, 384 seções, 260.726 triângulos residentes,
-106 draw calls, 84.822 triângulos desenhados.
+Estado estável em `--distance 8` (225 chunks): 893 seções com malha,
+627.448 triângulos residentes, 260 draw calls, fila de luz zerada.
+Converge em ~40 s e não cresce depois disso.
+
+Modos úteis: `--distance N`, `--seconds N` e `--walk` (voa em linha reta para
+exercitar carga e descarga contínua de chunks — um teste parado nunca toca
+esse caminho).
 
 > O FPS medido aqui (1–4) **não** representa a engine: o ambiente de CI não tem
 > GPU e o Chrome roda com SwiftShader, que rasteriza na CPU.
@@ -145,6 +150,9 @@ sem erro de console. Salva um screenshot para inspeção visual.
   moderno.
 - **Iluminação roda na thread principal.** Tem orçamento por frame e nunca trava,
   mas uma edição grande leva alguns frames para assentar.
+- **Voar muito rápido deixa o meshing para trás.** A ~24 blocos/s o backlog
+  cresce mais rápido do que os workers drenam, e o horizonte fica esburacado até
+  você parar. É throughput, não vazamento: a fila drena sozinha.
 
 ---
 

@@ -18,7 +18,7 @@
  */
 
 import { LIGHT_ABSORB, LIGHT_EMISSION } from './Blocks.js';
-import { WORLD_HEIGHT } from './Chunk.js';
+import { WORLD_HEIGHT, STRIDE_Z, STRIDE_Y } from './Chunk.js';
 
 /** Neighbour offsets: +X, -X, +Y, -Y, +Z, -Z. */
 const NEIGHBOURS = [
@@ -155,24 +155,55 @@ export class Lighting {
    * @param {import('./Chunk.js').Chunk} chunk
    */
   seedBorders(chunk) {
+    const world = this.world;
     const baseX = chunk.cx * 16;
     const baseZ = chunk.cz * 16;
-    const world = this.world;
 
-    for (let y = 0; y < WORLD_HEIGHT; y++) {
+    for (let side = 0; side < 4; side++) {
+      const dx = side === 0 ? -1 : side === 1 ? 1 : 0;
+      const dz = side === 2 ? -1 : side === 3 ? 1 : 0;
+
+      const other = world.getChunk(chunk.cx + dx, chunk.cz + dz);
+      if (other === null) continue;
+
       for (let i = 0; i < 16; i++) {
-        this._seedIfLit(world, baseX + i, y, baseZ);
-        this._seedIfLit(world, baseX + i, y, baseZ + 15);
-        this._seedIfLit(world, baseX, y, baseZ + i);
-        this._seedIfLit(world, baseX + 15, y, baseZ + i);
+        // Local coordinates of the touching pair: the inner cell sits on this
+        // chunk's edge, the outer one on the neighbour's opposite edge.
+        const lx = dx === -1 ? 0 : dx === 1 ? 15 : i;
+        const lz = dz === -1 ? 0 : dz === 1 ? 15 : i;
+        const ox = dx === -1 ? 15 : dx === 1 ? 0 : i;
+        const oz = dz === -1 ? 15 : dz === 1 ? 0 : i;
+
+        const innerBase = lx + lz * STRIDE_Z;
+        const outerBase = ox + oz * STRIDE_Z;
+        const wxIn = baseX + lx;
+        const wzIn = baseZ + lz;
+        const wxOut = wxIn + dx;
+        const wzOut = wzIn + dz;
+
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+          const yo = y * STRIDE_Y;
+          const a = chunk.light[innerBase + yo];
+          const b = other.light[outerBase + yo];
+          if (a === b) continue;
+
+          // Only a difference greater than one can actually flow: a cell at
+          // level L raises its neighbour to at most L-1. Seeding every lit cell
+          // instead — the whole open sky column included, where both sides are
+          // already 15 — floods the queue with millions of no-ops and starves
+          // meshing for the rest of the session.
+          const skyIn = a >> 4;
+          const skyOut = b >> 4;
+          if (skyIn > skyOut + 1) this.skyAdd.push(wxIn, y, wzIn, 0);
+          else if (skyOut > skyIn + 1) this.skyAdd.push(wxOut, y, wzOut, 0);
+
+          const blkIn = a & 15;
+          const blkOut = b & 15;
+          if (blkIn > blkOut + 1) this.blockAdd.push(wxIn, y, wzIn, 0);
+          else if (blkOut > blkIn + 1) this.blockAdd.push(wxOut, y, wzOut, 0);
+        }
       }
     }
-  }
-
-  /** @private */
-  _seedIfLit(world, x, y, z) {
-    if (world.getSkyLight(x, y, z) > 0) this.skyAdd.push(x, y, z, 0);
-    if (world.getBlockLight(x, y, z) > 0) this.blockAdd.push(x, y, z, 0);
   }
 
   /**

@@ -98,9 +98,11 @@ export class World {
       if (neighbour !== null) {
         neighbour.markAllDirty();
         this.markChunkDirty(neighbour);
-        this.lighting.seedBorders(neighbour);
       }
     }
+    // One call, not one per neighbour: seedBorders compares both sides of each
+    // shared face and seeds whichever is brighter, so it already covers the
+    // neighbours' side of the exchange.
     this.lighting.seedBorders(chunk);
   }
 
