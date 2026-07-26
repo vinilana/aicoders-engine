@@ -227,6 +227,22 @@ export class World {
     return (chunk.fluid[(x & 15) + (z & 15) * STRIDE_Z + y * STRIDE_Y] & FLUID_SOURCE_BIT) !== 0;
   }
 
+  /** @returns {number} head above the cell, 0..255 */
+  getFluidPressure(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return 0;
+    const chunk = this.getChunk(x >> 4, z >> 4);
+    if (chunk === null) return 0;
+    return chunk.pressure[(x & 15) + (z & 15) * STRIDE_Z + y * STRIDE_Y];
+  }
+
+  /** @param {number} value 0..255 */
+  setFluidPressure(x, y, z, value) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const chunk = this.getChunk(x >> 4, z >> 4);
+    if (chunk === null) return;
+    chunk.pressure[(x & 15) + (z & 15) * STRIDE_Z + y * STRIDE_Y] = value;
+  }
+
   /**
    * The simulation's write path.
    *

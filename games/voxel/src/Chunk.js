@@ -105,6 +105,12 @@ export class Chunk {
     /** @type {Uint8Array} Fluid: low nibble level, bit 7 source. */
     this.fluid = new Uint8Array(CHUNK_VOLUME);
     /**
+     * @type {Uint8Array} Hydrostatic head above each cell, in units of
+     * FLUID_MAX per block. Drives communicating vessels: a room dug below the
+     * surface of a lake fills to lake level rather than to a single block deep.
+     */
+    this.pressure = new Uint8Array(CHUNK_VOLUME);
+    /**
      * @type {Uint8Array} Per-column height of the highest light-blocking block
      * plus one, i.e. the Y at which skylight is still full strength.
      */
@@ -226,7 +232,21 @@ export class Chunk {
   /** Clears both level and source bit. */
   clearFluid(x, y, z) {
     if (y < 0 || y >= WORLD_HEIGHT) return;
-    this.fluid[x + z * STRIDE_Z + y * STRIDE_Y] = 0;
+    const i = x + z * STRIDE_Z + y * STRIDE_Y;
+    this.fluid[i] = 0;
+    this.pressure[i] = 0;
+  }
+
+  /** @returns {number} head above the cell, 0..255 */
+  getPressure(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return 0;
+    return this.pressure[x + z * STRIDE_Z + y * STRIDE_Y];
+  }
+
+  /** @param {number} value 0..255 */
+  setPressure(x, y, z, value) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    this.pressure[x + z * STRIDE_Z + y * STRIDE_Y] = value;
   }
 
   /** Recomputes the heightmap, the per-section counters and the fluid from scratch. */
@@ -239,6 +259,27 @@ export class Chunk {
     // pouring rather than empty a finite lake one cell at a time.
     for (let i = 0; i < CHUNK_VOLUME; i++) {
       fluid[i] = blocks[i] === WATER ? (FLUID_SOURCE_BIT | FLUID_MAX) : 0;
+    }
+
+    // Seed the hydrostatic head so an ocean can push the instant it is breached.
+    // The solver would work this out on its own as the disturbance spreads, but
+    // only after the head had crawled out from the dug cell; seeding it here is
+    // one extra pass over data already in cache.
+    const pressure = this.pressure;
+    for (let z = 0; z < CHUNK_Z; z++) {
+      for (let x = 0; x < CHUNK_X; x++) {
+        const col = x + z * STRIDE_Z;
+        let topSource = -1;
+        for (let y = WORLD_HEIGHT - 1; y >= 0; y--) {
+          const i = col + y * STRIDE_Y;
+          if (blocks[i] !== WATER) { topSource = -1; pressure[i] = 0; continue; }
+          // Walking down, the first water cell of a run is the free surface of
+          // that column; every cell under it carries that much head. All
+          // generated water is a source, so the run top is the anchor.
+          if (topSource < 0) topSource = y;
+          pressure[i] = topSource > y ? Math.min(255, (topSource - y) * FLUID_MAX) : 0;
+        }
+      }
     }
 
     for (let i = 0; i < SECTION_COUNT; i++) this.sections[i].nonAir = 0;

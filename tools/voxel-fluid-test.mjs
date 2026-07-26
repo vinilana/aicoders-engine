@@ -391,6 +391,80 @@ console.log('\n--- chunk que chega depois');
   equal('invariante intacta atravessando a borda', invariantBreaks(world), 0);
 }
 
+/* -------------------------------------------------- vasos comunicantes */
+
+console.log('\n--- sala selada abaixo do nivel do lago');
+{
+  // Bloco macico de pedra com um lago fundo e uma sala vazia ao lado, separados
+  // por uma parede. Atravessa a pilha inteira do jogo: array de pressao por
+  // chunk, acessores do World e a invariante bloco/nivel.
+  const world = new World({ seed: 21 });
+  const Y0 = 30;
+  const TOP = 40;
+  for (let cz = -1; cz <= 1; cz++) {
+    for (let cx = -1; cx <= 1; cx++) {
+      const chunk = new Chunk(cx, cz);
+      for (let y = Y0 - 1; y <= TOP + 1; y++) {
+        for (let z = 0; z < 16; z++) {
+          for (let x = 0; x < 16; x++) chunk.set(x, y, z, STONE);
+        }
+      }
+      chunk.rebuildDerived();
+      world.addChunk(chunk);
+    }
+  }
+
+  // Lago em x=0..4, cheio de agua ate' TOP. Sala vazia em x=8..12.
+  for (let y = Y0; y <= TOP; y++) {
+    for (let x = 0; x <= 4; x++) world.setBlock(x, y, 0, WATER);
+    for (let x = 8; x <= 12; x++) world.setBlock(x, y, 0, AIR);
+  }
+  world.fluid.settle(6000);
+
+  equal('a parede segura o lago', world.getFluidLevel(8, Y0, 0), 0);
+  check('o fundo do lago acumula carga', world.getFluidPressure(4, Y0, 0) > 0,
+    world.getFluidPressure(4, Y0, 0) + ' unidades sob ' + (TOP - Y0) + ' blocos');
+
+  // Tunel de tres blocos no fundo da parede.
+  for (let x = 5; x <= 7; x++) world.setBlock(x, Y0, 0, AIR);
+  world.fluid.settle(8000);
+
+  equal('o tunel enche', world.getFluidLevel(6, Y0, 0), FLUID_MAX);
+  equal('o chao da sala enche', world.getFluidLevel(10, Y0, 0), FLUID_MAX);
+
+  let room = Y0 - 1;
+  for (let y = Y0; y <= TOP; y++) if (world.getFluidLevel(10, y, 0) > 0) room = y;
+  check('a sala sobe ate' + "' " + 'o nivel do lago', room >= TOP - 1,
+    'topo da sala em y=' + room + ', lago em y=' + TOP);
+  check('sem transbordar para fora', world.getFluidLevel(10, TOP + 1, 0) === 0);
+  equal('invariante intacta', invariantBreaks(world), 0);
+}
+
+console.log('\n--- um balde num plano continua sendo um balde');
+{
+  // A regressao que importa: pressao nao pode transformar uma fonte solitaria
+  // num afogamento. Uma lamina fina nao tem nada em cima, logo nao tem carga.
+  const world = new World({ seed: 23 });
+  for (let cz = -1; cz <= 1; cz++) {
+    for (let cx = -1; cx <= 1; cx++) {
+      const chunk = new Chunk(cx, cz);
+      for (let z = 0; z < 16; z++) {
+        for (let x = 0; x < 16; x++) chunk.set(x, 50, z, STONE);
+      }
+      chunk.rebuildDerived();
+      world.addChunk(chunk);
+    }
+  }
+  world.setBlock(0, 51, 0, WATER);
+  world.fluid.settle(4000);
+
+  equal('o alcance continua sendo maxLevel-1', world.getFluidLevel(7, 51, 0), 1);
+  equal('e para ali', world.getFluidLevel(8, 51, 0), 0);
+  equal('nada sobe uma camada', world.getFluidLevel(0, 52, 0), 0);
+  equal('e a fonte nao acumula carga', world.getFluidPressure(0, 51, 0), 0,
+    'nada esta' + "' " + 'em cima dela');
+}
+
 /* ----------------------------------------------------------- resultado */
 
 console.log('\n' + (failed === 0 ? 'PASS' : 'FAIL') +

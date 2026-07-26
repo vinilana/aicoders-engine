@@ -54,6 +54,13 @@ uma fresta por onde se enxerga através da água de raspão. É também o que fa
 água correr visivelmente para baixo em vez de descer em degraus. Água parada
 continua mesclando: um lago plano de 16×16 ainda vira um único quad.
 
+**A água sobe.** Uma sala escavada abaixo do nível do lago enche até o nível do
+lago, e dois poços ligados pelo fundo se nivelam — carga hidrostática, não
+espalhamento. Um balde solitário num plano continua sendo um balde, porque não há
+nada em cima dele e portanto não há carga. O que separa os dois casos é que só
+uma **fonte** ancora carga e só uma coluna **confinada** ancora carga; sem a
+segunda condição, uma cachoeira pressurizaria a própria poça.
+
 **Água gerada é fonte; água que escorreu não é.** Essa única distinção é o que
 faz um oceano se sustentar sem custo nenhum em repouso (fontes nunca mudam, então
 nunca entram na fila) e ao mesmo tempo faz uma poça derramada secar quando o

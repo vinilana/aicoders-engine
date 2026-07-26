@@ -204,6 +204,35 @@ async function main() {
         }
       }
 
+      // --- vasos comunicantes num mundo de verdade: uma coluna de fontes ao
+      // lado de um poco selado mais fundo. Sem hidrostatica o poco receberia
+      // uma lamina de um bloco; com ela sobe ate' o nivel da coluna.
+      let vesselRise = -1;
+      let vesselHead = 0;
+      {
+        const cx = Math.floor(p.body.x) + 30;
+        const cz = Math.floor(p.body.z) + 30;
+        const ground = w.surfaceY(cx, cz);
+        if (ground > 8) {
+          const base = ground - 6;
+          // Escava dois pocos de 6 de fundo, ligados so' no fundo.
+          for (let y = base; y <= ground; y++) {
+            for (let d = 0; d <= 4; d++) w.setBlock(cx + d, y, cz, 0);
+          }
+          for (let y = base + 1; y <= ground; y++) {
+            w.setBlock(cx + 2, y, cz, 1); // parede divisoria, aberta so' no fundo
+          }
+          // Enche o lado esquerdo ate' em cima com fontes.
+          for (let y = base; y <= ground; y++) w.setBlock(cx, y, cz, 16);
+          w.fluid.settle(8000);
+          vesselHead = w.getFluidPressure(cx, base, cz);
+          vesselRise = -1;
+          for (let y = base; y <= ground; y++) {
+            if (w.getFluidLevel(cx + 4, y, cz) > 0) vesselRise = y - base;
+          }
+        }
+      }
+
       // --- o proxy do broadphase acompanha o remesh. Uma secao de chunk nunca
       // se move, entao trocar a geometria no lugar e' a unica forma de ela mudar
       // de tamanho. Conferir boundingBoxWorld nao serve: o ChunkManager ja' o
@@ -250,7 +279,7 @@ async function main() {
         raycastHit: before,
         lightQueue: g.chunks.stats.lightQueue,
         fluidPlaced, fluidSpread, fluidInvariant, fluidDrained, fluidRemeshed,
-        staleBounds, boundsChecked,
+        staleBounds, boundsChecked, vesselRise, vesselHead,
         pendingGenerate: g.chunks.stats.pendingGenerate,
         fps: Math.round(g.engine.time.fps),
         error: g.chunks.lastError,
@@ -346,6 +375,8 @@ async function main() {
         report.fluidRemeshed + ' secoes sujas'],
       ['sem a fonte a agua seca', report.fluidDrained === 0,
         report.fluidDrained + ' celulas restantes'],
+      ['agua sobe no vaso comunicante', report.vesselRise >= 4,
+        'subiu ' + report.vesselRise + ' blocos no poco oposto, carga ' + report.vesselHead],
       ['proxy do broadphase em dia apos remesh', report.staleBounds === 0 && report.boundsChecked > 0,
         report.staleBounds + ' obsoletos de ' + report.boundsChecked + ' malhas'],
       ['edicao de bloco funciona', report.brokeOk === true && report.afterBreak === 0 &&

@@ -21,7 +21,7 @@
  *    `registerShadowShader`, `registerDebugShader`) or `registerAllShaders`.
  */
 /** Engine version string. */
-export const VERSION: "1.2.1";
+export const VERSION: "1.3.0";
 export { Vec2 } from "./math/Vec2.js";
 export { Vec3 } from "./math/Vec3.js";
 export { Vec4 } from "./math/Vec4.js";

@@ -611,12 +611,25 @@ Duas regras evitam que o resultado pareca difusao em vez de agua:
   uma coluna em queda livre fica cheia em toda a altura e o teste ingenuo de "tem espaco embaixo"
   passa a dizer que ela e uma pilha de pocas.
 
+**Vasos comunicantes.** As regras acima so movem agua para baixo e para os lados, entao nao
+respondem "liguei um tunel ao fundo do lago, por que a sala nao enche ate o nivel dele?". Fornecer
+`getPressure`/`setPressure` liga um campo de carga hidrostatica e a agua passa a subir: uma sala
+abaixo do nivel do lago enche ate o nivel do lago, e dois pocos ligados pelo fundo se nivelam.
+
+A carga se propaga para o lado e para cima, sempre com custo — nunca para baixo — entao e um campo
+de distancia como o de nivel: converge, nao se sustenta em ciclo, e desaba sozinho quando a agua que
+o sustentava some. Duas condicoes a delimitam: **so uma fonte ancora carga** (senao a ancora vira
+uma aresta para baixo e fecha ciclo com a de cima, e um tanque fica cheio para sempre depois de
+cortado o fornecimento) e **so uma coluna confinada ancora carga** (senao uma cachoeira pressuriza a
+propria poca e espalha uma lamina de forca total pelo chao). Sem os dois acessores nada disso liga e
+o solver se comporta exatamente como antes.
+
 `flowAt(x, y, z, out)` da a direcao da correnteza pelo gradiente de nivel, para empurrar quem
 estiver dentro dela.
 
-Verificado em `tools/fluid-test.mjs` (43 asserções sobre o solver) e `tools/voxel-fluid-test.mjs`
-(35 sobre a integracao no jogo voxel, incluindo cavar ao lado do oceano gerado e a estanqueidade da
-superficie desenhada).
+Verificado em `tools/fluid-test.mjs` (60 asserções sobre o solver) e `tools/voxel-fluid-test.mjs`
+(46 sobre a integracao no jogo voxel, incluindo cavar ao lado do oceano gerado, a estanqueidade da
+superficie desenhada e uma sala selada que enche ate o nivel do lago).
 
 ### Input
 

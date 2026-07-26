@@ -31,6 +31,47 @@
  * that spreads a bounded distance and stops is both what players expect and what
  * stays stable when they edit the world underneath it.
  *
+ * ## Pressure, and why water rises
+ *
+ * The rules above only ever move water down and sideways, so on their own they
+ * cannot answer "I connected a tunnel to the bottom of the lake, why does the
+ * room not fill to lake level?". Communicating vessels need a notion of
+ * hydrostatic head, and that is what the optional pressure field adds.
+ *
+ * `p[c]` is how far the free surface of the connected body sits **above the top
+ * of cell c**, measured in units where `maxLevel` units make one cell. A full
+ * cell with nothing above it has no pressure; one under nine cells of water has
+ * `9 * maxLevel`.
+ *
+ * Pressure is anchored by the water actually standing on a cell, and spreads
+ * from there:
+ *
+ *   - **anchor** — the run of full cells directly above c;
+ *   - **sideways** — a neighbour's pressure minus one unit, an eighth of a cell
+ *     of head lost per cell of distance;
+ *   - **upward** — the cell below's pressure minus one cell's worth.
+ *
+ * Every edge costs something and none of them point downward, so the field is a
+ * distance field exactly like the level field: it converges, it cannot sustain
+ * itself in a loop, and it collapses the moment the water standing on top of it
+ * goes away. That is the whole reason pressure is not simply propagated as a
+ * maximum — a plain max-flood holds a stale value forever in any cycle, and
+ * would need the two-queue removal that light propagation needs.
+ *
+ * Water then rises: a cell fills from a pressurised neighbour beside it, or from
+ * a pressurised cell below it, up to `p` — partially when what remains is less
+ * than a whole cell, which is what makes a U-tube settle level instead of
+ * snapping to the nearest block.
+ *
+ * The sideways loss is a deliberate approximation. Real pressure does not fade
+ * with horizontal distance, but a lossless field would need cycle handling, and
+ * one eighth of a cell per cell means a lake ten deep still carries its head
+ * eighty cells — far past any tunnel a player digs, while keeping every flood
+ * bounded by how deep the water actually is.
+ *
+ * Pressure is off unless `getPressure`/`setPressure` are supplied, and with it
+ * off the solver behaves exactly as it did without it.
+ *
  * ## Flowing toward the drop
  *
  * One extra rule does most of the work of making the result look deliberate:
@@ -186,6 +227,25 @@ export class CellularFluid {
     /** @type {(x: number, y: number, z: number) => boolean} */
     this.isLoaded = options.isLoaded || (() => true);
 
+    /**
+     * Hydrostatic pressure, optional. Supplying both accessors turns on
+     * communicating vessels; leaving them out keeps the solver purely
+     * downhill-and-sideways, which is all a Minecraft-like game needs.
+     * @type {boolean}
+     */
+    this.hydrostatic = typeof options.getPressure === 'function' &&
+      typeof options.setPressure === 'function';
+    /** @type {(x: number, y: number, z: number) => number} */
+    this.getPressure = options.getPressure || (() => 0);
+    /** @type {(x: number, y: number, z: number, pressure: number) => void} */
+    this.setPressure = options.setPressure || (() => {});
+    /**
+     * @type {number} Largest head the field can carry, in pressure units. Also
+     * caps the upward scan that anchors the field, so a very deep ocean does not
+     * pay for depth nobody can reach.
+     */
+    this.maxPressure = options.maxPressure !== undefined ? options.maxPressure : 255;
+
     /** @type {number} */
     this.maxLevel = options.maxLevel !== undefined ? options.maxLevel : 8;
     /** @type {number} */
@@ -334,19 +394,109 @@ export class CellularFluid {
 
     const current = this.getLevel(x, y, z);
     const target = this._targetLevel(x, y, z);
-    if (target === current) return false;
+
+    // Pressure is recomputed even when the level holds steady: the head above a
+    // cell can change without the cell itself changing, and a stale head is what
+    // would leave water standing where nothing supports it any more.
+    let pressureMoved = false;
+    if (this.hydrostatic === true) {
+      const nextPressure = this._targetPressure(x, y, z, target);
+      if (nextPressure !== this.getPressure(x, y, z)) {
+        this.setPressure(x, y, z, nextPressure);
+        pressureMoved = true;
+      }
+    }
+
+    if (target === current) {
+      if (pressureMoved) this._pushNeighbours(x, y, z);
+      return false;
+    }
 
     this.setLevel(x, y, z, target);
 
     // The change can only matter to cells that read this one: the six
     // neighbours. Queue them for the next tick, which is what makes the front
     // advance one cell at a time.
+    this._pushNeighbours(x, y, z);
+    return true;
+  }
+
+  /** @private */
+  _pushNeighbours(x, y, z) {
     this._next.push(x, y + 1, z);
     this._next.push(x, y - 1, z);
     for (let i = 0; i < 4; i++) {
       this._next.push(x + SIDES[i][0], y, z + SIDES[i][1]);
     }
-    return true;
+  }
+
+  /**
+   * Head above the top of a cell, in units of `maxLevel` per cell.
+   *
+   * Anchored by the water actually standing on the cell and relayed sideways and
+   * upward at a cost, never downward. That is what makes it a distance field
+   * rather than a max-flood, and therefore what makes it collapse on its own
+   * when the water above drains instead of holding a stale value in a loop.
+   *
+   * @private
+   * @param {number} level The level this cell is settling at.
+   * @returns {number} 0..maxPressure
+   */
+  _targetPressure(x, y, z, level) {
+    // Only a filled cell carries head. A partial cell has a free surface of its
+    // own, so by definition nothing is pressing down on it.
+    if (level !== this.maxLevel || this.isSolid(x, y, z)) return 0;
+
+    // Anchor: walk up the unbroken column of full cells standing on this one and
+    // take the height of the **highest source** in it. Only a source anchors.
+    //
+    // This is the whole reason the field terminates, and it took two wrong
+    // answers to get to. Counting any full cell above makes the anchor a
+    // downward edge, and a downward edge closes a loop with the upward one: the
+    // cell above is full because this cell has pressure, and this cell has
+    // pressure because the cell above is full. The pair then holds its own
+    // weight forever and a tank stays brim full after its supply is cut.
+    //
+    // Excluding cells that pressure lifted is not enough either, because the
+    // falling-water rule reports a pressure-lifted cell as legitimately fed from
+    // above and the loop simply reappears one step further out. A source is the
+    // only thing in the model that owes its existence to nothing, so a source is
+    // the only thing that can carry the weight of a column.
+    let best = 0;
+    const limit = (this.maxPressure / this.maxLevel) | 0;
+    for (let i = 1; i <= limit; i++) {
+      const ay = y + i;
+      if (!this.isLoaded(x, ay, z) || this.isSolid(x, ay, z)) break;
+      if (this.getLevel(x, ay, z) !== this.maxLevel) break;
+      // An unconfined column is a fall, not a head. Water in free air has walls
+      // of nothing to press against, so it weighs on nothing; without this a
+      // waterfall pressurises its own splash pool and sprays a full-strength
+      // sheet across the floor. Confinement is what tells a standing column
+      // apart from a falling one, and both look identical cell by cell.
+      if (!this._isConfined(x, ay, z)) break;
+      if (this.isSource(x, ay, z)) best = i * this.maxLevel;
+    }
+
+    // Relayed from the side, an eighth of a cell of head per cell of distance.
+    for (let i = 0; i < 4; i++) {
+      const nx = x + SIDES[i][0];
+      const nz = z + SIDES[i][1];
+      if (!this.isLoaded(nx, y, nz) || this.isSolid(nx, y, nz)) continue;
+      if (this.getLevel(nx, y, nz) !== this.maxLevel) continue;
+      const relayed = this.getPressure(nx, y, nz) - 1;
+      if (relayed > best) best = relayed;
+    }
+
+    // Relayed up from below, one cell of head per cell climbed. This is what
+    // carries the head around the bend of a U and back up the far arm.
+    if (this.isLoaded(x, y - 1, z) && !this.isSolid(x, y - 1, z) &&
+        this.getLevel(x, y - 1, z) === this.maxLevel) {
+      const relayed = this.getPressure(x, y - 1, z) - this.maxLevel;
+      if (relayed > best) best = relayed;
+    }
+
+    if (best < 0) return 0;
+    return best > this.maxPressure ? this.maxPressure : best;
   }
 
   /**
@@ -355,6 +505,56 @@ export class CellularFluid {
    * @returns {number} 0..maxLevel
    */
   _targetLevel(x, y, z) {
+    if (this.isSolid(x, y, z)) return 0;
+    if (this.isSource(x, y, z)) return this.maxLevel;
+
+    // Hydrostatic rise, checked first because a cell under head is not a film
+    // running downhill: it is part of a filled body, and the level it settles at
+    // owes nothing to how far it is from a source.
+    let best = 0;
+    if (this.hydrostatic === true) {
+      // Pushed up from below. The water climbs as far as the head reaches, and
+      // the last cell fills only partially when less than a whole cell of head
+      // is left — without that a U-tube snaps to whole blocks and reads as
+      // permanently out of balance.
+      if (this.isLoaded(x, y - 1, z) && !this.isSolid(x, y - 1, z) &&
+          this.getLevel(x, y - 1, z) === this.maxLevel) {
+        const head = this.getPressure(x, y - 1, z);
+        if (head > 0) best = head < this.maxLevel ? head : this.maxLevel;
+      }
+      // Pushed in from the side. A full neighbour at this height with anything
+      // standing on it puts the free surface above this cell's ceiling too, so
+      // this cell belongs to the same filled body and fills completely.
+      if (best < this.maxLevel) {
+        for (let i = 0; i < 4; i++) {
+          const nx = x + SIDES[i][0];
+          const nz = z + SIDES[i][1];
+          if (!this.isLoaded(nx, y, nz) || this.isSolid(nx, y, nz)) continue;
+          if (this.getLevel(nx, y, nz) !== this.maxLevel) continue;
+          if (this.getPressure(nx, y, nz) > 0) { best = this.maxLevel; break; }
+        }
+      }
+      if (best === this.maxLevel) return best;
+    }
+
+    const gravity = this._gravityLevel(x, y, z);
+    return gravity > best ? gravity : best;
+  }
+
+  /**
+   * The level a cell would settle at with no hydrostatic help at all: source,
+   * fed from above, or fed sideways by a neighbour that has nowhere better to
+   * send its water.
+   *
+   * Split out of `_targetLevel` so the hydrostatic rules sit in front of it
+   * rather than tangled through it: pressure decides first whether a cell is
+   * part of a filled body, and only what pressure does not claim falls through
+   * to spreading.
+   *
+   * @private
+   * @returns {number} 0..maxLevel
+   */
+  _gravityLevel(x, y, z) {
     if (this.isSolid(x, y, z)) return 0;
     if (this.isSource(x, y, z)) return this.maxLevel;
 
@@ -389,6 +589,28 @@ export class CellularFluid {
       if (candidate > best) best = candidate;
     }
     return best;
+  }
+
+  /**
+   * True when a cell is walled in on all four sides, by solid or by more of the
+   * same liquid.
+   *
+   * Unloaded counts as walled: a column that runs off the edge of the simulated
+   * region should not stop weighing just because the neighbour has not streamed
+   * in yet.
+   *
+   * @private
+   */
+  _isConfined(x, y, z) {
+    for (let i = 0; i < 4; i++) {
+      const nx = x + SIDES[i][0];
+      const nz = z + SIDES[i][1];
+      if (!this.isLoaded(nx, y, nz)) continue;
+      if (this.isSolid(nx, y, nz)) continue;
+      if (this.getLevel(nx, y, nz) === this.maxLevel) continue;
+      return false;
+    }
+    return true;
   }
 
   /**

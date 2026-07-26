@@ -49,6 +49,12 @@ export class VoxelFluid {
       setLevel: (x, y, z, level) => world.applyFluidLevel(x, y, z, level),
       isSource: (x, y, z) => world.isFluidSource(x, y, z),
 
+      // Hydrostatics on: a room dug below the surface of a lake fills to lake
+      // level, not to a single block deep, and a channel dug between two pools
+      // levels them out.
+      getPressure: (x, y, z) => world.getFluidPressure(x, y, z),
+      setPressure: (x, y, z, p) => world.setFluidPressure(x, y, z, p),
+
       // Anything that is not air and not water stops the flow. Using IS_SOLID
       // would let water pour straight through leaves and glass, which are not
       // solid to an entity but are certainly watertight.

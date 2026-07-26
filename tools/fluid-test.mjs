@@ -44,6 +44,7 @@ class Grid {
     this.level = new Uint8Array(SIZE * HEIGHT * SIZE);
     this.solid = new Uint8Array(SIZE * HEIGHT * SIZE);
     this.source = new Uint8Array(SIZE * HEIGHT * SIZE);
+    this.pressure = new Uint8Array(SIZE * HEIGHT * SIZE);
     this.writes = 0;
   }
 
@@ -84,6 +85,15 @@ class Grid {
     return sum;
   }
 
+  /** Bloco solido de (x0,y0,z0) a (x1,y1,z1), inclusive. */
+  fill(x0, y0, z0, x1, y1, z1, v) {
+    for (let y = y0; y <= y1; y++) {
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) this.setSolid(x, y, z, v);
+      }
+    }
+  }
+
   /** @returns {CellularFluid} */
   solver(options = {}) {
     return new CellularFluid({
@@ -92,6 +102,17 @@ class Grid {
       isSolid: (x, y, z) => this.inside(x, y, z) && this.solid[this.index(x, y, z)] === 1,
       isSource: (x, y, z) => this.inside(x, y, z) && this.source[this.index(x, y, z)] === 1,
       isLoaded: (x, y, z) => this.inside(x, y, z),
+      ...options,
+    });
+  }
+
+  /** Solver com hidrostatica ligada. */
+  pressureSolver(options = {}) {
+    return this.solver({
+      getPressure: (x, y, z) => (this.inside(x, y, z) ? this.pressure[this.index(x, y, z)] : 0),
+      setPressure: (x, y, z, v) => {
+        if (this.inside(x, y, z)) this.pressure[this.index(x, y, z)] = v;
+      },
       ...options,
     });
   }
@@ -388,6 +409,143 @@ console.log('\n--- custo em repouso');
   equal('parado nao escreve nada', g.writes, writesAfterSettle,
     'setLevel so' + "' " + 'e chamado quando o nivel muda de verdade');
   check('e a fila fica vazia', fluid.pending === false);
+}
+
+/* -------------------------------------------------- vasos comunicantes */
+
+console.log('\n--- vasos comunicantes (tubo em U)');
+{
+  const g = new Grid();
+  // Bloco macico, com um U escavado dentro dele.
+  g.fill(0, 0, 0, SIZE - 1, HEIGHT - 1, SIZE - 1, true);
+  const Z = 12;
+  const LEFT = 5;
+  const RIGHT = 9;
+  const TOP = 10;
+  for (let y = 1; y <= TOP; y++) {
+    g.setSolid(LEFT, y, Z, false);   // braco esquerdo
+    g.setSolid(RIGHT, y, Z, false);  // braco direito
+  }
+  for (let x = LEFT; x <= RIGHT; x++) g.setSolid(x, 1, Z, false); // fundo
+
+  // Fonte no alto do braco esquerdo. A agua desce, atravessa o fundo e tem
+  // que subir do outro lado ate' o mesmo nivel.
+  g.setSource(LEFT, TOP, Z);
+
+  const fluid = g.pressureSolver();
+  fluid.markDirty(LEFT, TOP, Z);
+  fluid.settle(4000);
+
+  equal('o braco esquerdo enche', g.get(LEFT, 2, Z), 8);
+  equal('o fundo enche', g.get(LEFT + 2, 1, Z), 8);
+
+  // Altura da coluna do braco direito.
+  let rise = 0;
+  for (let y = 1; y <= TOP; y++) if (g.get(RIGHT, y, Z) > 0) rise = y;
+  check('a agua sobe pelo braco oposto', rise > 1,
+    'topo em y=' + rise + ' (sem pressao ficaria em y=1)');
+  check('e alcanca praticamente o nivel da fonte', rise >= TOP - 1,
+    'y=' + rise + ' contra a fonte em y=' + TOP);
+  check('mas nao passa dela', g.get(RIGHT, TOP + 1, Z) === 0,
+    'agua nao sobe acima do proprio nivel');
+}
+
+console.log('\n--- sala escavada abaixo do nivel do lago');
+{
+  const g = new Grid();
+  g.fill(0, 0, 0, SIZE - 1, HEIGHT - 1, SIZE - 1, true);
+  const Z = 12;
+  // Lago 8 de profundidade em x=3..7, y=1..8.
+  for (let y = 1; y <= 8; y++) {
+    for (let x = 3; x <= 7; x++) g.setSolid(x, y, Z, false);
+  }
+  for (let y = 1; y <= 8; y++) {
+    for (let x = 3; x <= 7; x++) g.setSource(x, y, Z);
+  }
+  // Sala vazia em x=10..14, y=1..8, separada por uma parede em x=8..9.
+  for (let y = 1; y <= 8; y++) {
+    for (let x = 10; x <= 14; x++) g.setSolid(x, y, Z, false);
+  }
+
+  const fluid = g.pressureSolver();
+  for (let y = 1; y <= 8; y++) for (let x = 3; x <= 7; x++) fluid.markDirty(x, y, Z);
+  fluid.settle(4000);
+  equal('a parede segura o lago', g.get(12, 1, Z), 0);
+
+  // Um tunel de dois blocos no fundo da parede.
+  g.setSolid(8, 1, Z, false);
+  g.setSolid(9, 1, Z, false);
+  fluid.markDirty(8, 1, Z);
+  fluid.markDirty(9, 1, Z);
+  fluid.settle(4000);
+
+  equal('o tunel enche', g.get(9, 1, Z), 8);
+  equal('o chao da sala enche', g.get(12, 1, Z), 8);
+
+  let level = 0;
+  for (let y = 1; y <= 8; y++) if (g.get(12, y, Z) > 0) level = y;
+  check('a sala sobe ate' + "' " + 'o nivel do lago', level >= 7,
+    'topo da sala em y=' + level + ', lago em y=8');
+  check('e nao transborda', g.get(12, 9, Z) === 0);
+}
+
+console.log('\n--- pressao nao inventa agua');
+{
+  // O caso que separa hidrostatica de inundacao descontrolada: uma unica fonte
+  // num plano aberto nao tem nada em cima dela, entao nao tem pressao, e o
+  // resultado tem que ser identico ao do solver sem pressao.
+  const a = new Grid();
+  a.floor(0);
+  a.setSource(12, 1, 12);
+  const fa = a.solver();
+  fa.markDirty(12, 1, 12);
+  fa.settle();
+
+  const b = new Grid();
+  b.floor(0);
+  b.setSource(12, 1, 12);
+  const fb = b.pressureSolver();
+  fb.markDirty(12, 1, 12);
+  fb.settle();
+
+  equal('fonte isolada se comporta igual com e sem pressao', b.total(), a.total(),
+    'uma lamina fina nao carrega carga hidraulica');
+  equal('e o alcance continua sendo maxLevel-1', b.get(20, 1, 12), 0);
+  equal('sem afogar o plano', b.get(12, 2, 12), 0);
+}
+
+console.log('\n--- a carga some junto com a agua que a sustentava');
+{
+  const g = new Grid();
+  g.fill(0, 0, 0, SIZE - 1, HEIGHT - 1, SIZE - 1, true);
+  const Z = 12;
+  for (let y = 1; y <= 6; y++) {
+    for (let x = 5; x <= 9; x++) g.setSolid(x, y, Z, false);
+  }
+  for (let y = 1; y <= 6; y++) g.setSource(5, y, Z);
+
+  const fluid = g.pressureSolver();
+  for (let y = 1; y <= 6; y++) fluid.markDirty(5, y, Z);
+  fluid.settle(4000);
+
+  const filled = g.get(8, 3, Z);
+  check('a coluna pressurizada enche o tanque', filled > 0, 'nivel ' + filled);
+  const pressureBefore = g.pressure[g.index(8, 1, Z)];
+  check('e ha' + "' " + 'carga registrada no fundo', pressureBefore > 0, pressureBefore + ' unidades');
+
+  // Remove a coluna que sustentava tudo.
+  for (let y = 1; y <= 6; y++) {
+    g.setSource(5, y, Z, false);
+    g.set(5, y, Z, 0);
+    fluid.markDirty(5, y, Z);
+  }
+  fluid.settle(6000);
+
+  equal('sem a fonte nao sobra agua', g.total(), 0);
+  let stale = 0;
+  for (let i = 0; i < g.pressure.length; i++) if (g.pressure[i] > 0) stale++;
+  equal('nem carga presa em ciclo', stale, 0,
+    'um max-flood sem custo por aresta seguraria o valor para sempre');
 }
 
 /* ----------------------------------------------------------- resultado */

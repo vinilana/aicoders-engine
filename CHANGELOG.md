@@ -3,6 +3,63 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento conforme [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.3.0] — 2026-07-26
+
+Vasos comunicantes. A agua passa a subir.
+
+### Adicionado
+
+- **Pressao hidrostatica no `CellularFluid`**, opcional, ligada ao fornecer
+  `getPressure`/`setPressure`. Sem elas o solver se comporta exatamente como
+  antes.
+
+  As regras anteriores so' moviam agua para baixo e para os lados, entao nao
+  tinham resposta para "liguei um tunel ao fundo do lago, por que a sala nao
+  enche ate' o nivel dele?". Agora enche.
+
+  `p[c]` e' quanto a superficie livre do corpo conectado esta' **acima do topo
+  da celula c**, em unidades onde `maxLevel` unidades valem uma celula. O campo
+  e' ancorado pela fonte no alto da coluna e se propaga de la':
+
+  - **para o lado**, perdendo uma unidade por celula (um oitavo de bloco);
+  - **para cima**, perdendo o equivalente a uma celula por celula subida.
+
+  Toda aresta custa alguma coisa e nenhuma aponta para baixo, entao e' um campo
+  de distancia igual ao de nivel: converge, nao se sustenta em ciclo, e desaba
+  sozinho quando a agua que o sustentava some. Nao precisa da remocao em duas
+  filas que a propagacao de luz precisa.
+
+  A agua entao sobe — inteira a partir de um vizinho pressurizado ao lado,
+  parcialmente a partir de baixo quando sobra menos de uma celula de carga, que
+  e' o que faz um tubo em U assentar nivelado em vez de saltar de bloco em bloco.
+
+  Duas condicoes delimitam o efeito, e as duas custaram uma tentativa errada
+  cada:
+
+  - **so' fonte ancora carga.** Contar qualquer celula cheia acima transforma a
+    ancora numa aresta para baixo, que fecha ciclo com a de cima: a de cima esta'
+    cheia porque a de baixo tem pressao, e a de baixo tem pressao porque a de
+    cima esta' cheia. O par sustenta o proprio peso para sempre e um tanque
+    continua cheio depois de cortado o fornecimento.
+  - **so' coluna confinada ancora carga.** Agua em ar livre nao tem parede contra
+    a qual pressionar; sem isso uma cachoeira pressuriza a propria poca e joga
+    uma lamina de forca total pelo chao. Confinamento e' o que distingue uma
+    coluna parada de uma caindo — celula a celula as duas sao identicas.
+
+  A perda lateral e' aproximacao deliberada: pressao real nao decai com
+  distancia horizontal, mas um campo sem perda precisaria de tratamento de
+  ciclo, e um oitavo de bloco por bloco significa que um lago de dez de fundura
+  ainda carrega sua carga por oitenta blocos — muito alem de qualquer tunel — ao
+  mesmo tempo que mantem toda inundacao limitada pela profundidade real da agua.
+
+### Exemplo voxel
+
+- Agua sobe: uma sala escavada abaixo do nivel do lago enche ate' o nivel do
+  lago; dois pocos ligados pelo fundo se nivelam. Um balde solitario num plano
+  continua sendo um balde — nao ha' nada em cima dele, logo nao ha' carga.
+- Mais um `Uint8Array` por chunk para a carga, semeado na geracao para o oceano
+  poder empurrar no instante em que for rompido.
+
 ## [1.2.1] — 2026-07-26
 
 Duas causas independentes de "a agua some dependendo do angulo que se olha".
@@ -219,6 +276,7 @@ Primeira versao publicavel. A engine passa a ser consumivel como pacote.
   WSL2 com rede espelhada, onde um processo do Windows segura a porta sem
   aparecer no `ss`.
 
+[1.3.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.3.0
 [1.2.1]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.2.1
 [1.2.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.2.0
 [1.1.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.1.0

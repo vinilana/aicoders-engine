@@ -1,6 +1,6 @@
 {
   "name": "aicoders-engine",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "type": "module",
   "description": "Engine 3D WebGL2 escrita do zero em JavaScript puro. Zero dependencias de runtime, zero build: os modulos sao servidos crus ao navegador.",
   "license": "MIT",

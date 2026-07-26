@@ -57,6 +57,23 @@ export class CellularFluid {
     isSource: (x: number, y: number, z: number) => boolean;
     /** @type {(x: number, y: number, z: number) => boolean} */
     isLoaded: (x: number, y: number, z: number) => boolean;
+    /**
+     * Hydrostatic pressure, optional. Supplying both accessors turns on
+     * communicating vessels; leaving them out keeps the solver purely
+     * downhill-and-sideways, which is all a Minecraft-like game needs.
+     * @type {boolean}
+     */
+    hydrostatic: boolean;
+    /** @type {(x: number, y: number, z: number) => number} */
+    getPressure: (x: number, y: number, z: number) => number;
+    /** @type {(x: number, y: number, z: number, pressure: number) => void} */
+    setPressure: (x: number, y: number, z: number, pressure: number) => void;
+    /**
+     * @type {number} Largest head the field can carry, in pressure units. Also
+     * caps the upward scan that anchors the field, so a very deep ocean does not
+     * pay for depth nobody can reach.
+     */
+    maxPressure: number;
     /** @type {number} */
     maxLevel: number;
     /** @type {number} */
@@ -133,12 +150,52 @@ export class CellularFluid {
      * @returns {boolean} true when the level changed.
      */
     private _evaluate;
+    /** @private */
+    private _pushNeighbours;
+    /**
+     * Head above the top of a cell, in units of `maxLevel` per cell.
+     *
+     * Anchored by the water actually standing on the cell and relayed sideways and
+     * upward at a cost, never downward. That is what makes it a distance field
+     * rather than a max-flood, and therefore what makes it collapse on its own
+     * when the water above drains instead of holding a stale value in a loop.
+     *
+     * @private
+     * @param {number} level The level this cell is settling at.
+     * @returns {number} 0..maxPressure
+     */
+    private _targetPressure;
     /**
      * The level a cell should settle at, given its neighbourhood.
      * @private
      * @returns {number} 0..maxLevel
      */
     private _targetLevel;
+    /**
+     * The level a cell would settle at with no hydrostatic help at all: source,
+     * fed from above, or fed sideways by a neighbour that has nowhere better to
+     * send its water.
+     *
+     * Split out of `_targetLevel` so the hydrostatic rules sit in front of it
+     * rather than tangled through it: pressure decides first whether a cell is
+     * part of a filled body, and only what pressure does not claim falls through
+     * to spreading.
+     *
+     * @private
+     * @returns {number} 0..maxLevel
+     */
+    private _gravityLevel;
+    /**
+     * True when a cell is walled in on all four sides, by solid or by more of the
+     * same liquid.
+     *
+     * Unloaded counts as walled: a column that runs off the edge of the simulated
+     * region should not stop weighing just because the neighbour has not streamed
+     * in yet.
+     *
+     * @private
+     */
+    private _isConfined;
     /**
      * True when a cell still has somewhere below to send water.
      *
