@@ -235,9 +235,9 @@ console.log('\n--- cachoeira');
   equal('invariante intacta', invariantBreaks(world), 0);
 }
 
-/* ------------------------------------------------ o mesher ve os niveis */
+/* ------------------------------------------ a superficie e' uma lamina */
 
-console.log('\n--- superficie desenhada na altura do nivel');
+console.log('\n--- superficie continua e inclinada');
 {
   const world = new World({ seed: 11 });
   for (let cz = -1; cz <= 1; cz++) {
@@ -250,33 +250,89 @@ console.log('\n--- superficie desenhada na altura do nivel');
       world.addChunk(chunk);
     }
   }
-  world.setBlock(2, 33, 8, WATER);
+  world.setBlock(8, 33, 8, WATER);
   world.fluid.settle();
 
   const chunk = world.getChunk(0, 0);
-  const padded = world.buildPadded(chunk, 2); // secao que contem y=32..47
+  const padded = world.buildPadded(chunk, 2); // secao com y=32..47
   const { water } = meshSection(padded.blocks, padded.light, padded.fluid);
 
   check('a secao produziu geometria de agua', water !== null,
     water ? water.positions.length / 3 + ' vertices' : 'nenhuma');
 
   if (water !== null) {
-    // Alturas distintas do topo provam que o nivel chegou ao mesher: com um
-    // valor unico todas as superficies sairiam no mesmo Y. As posicoes vem em
-    // coordenadas locais da secao (y=32 do mundo e' 0 aqui), nao mundiais.
-    const tops = new Set();
-    for (let i = 1; i < water.positions.length; i += 3) {
-      const y = water.positions[i];
-      if (y > 1 && y < 2) tops.add(Math.round((y - 1) * 1000) / 1000);
-    }
-    check('a superficie tem mais de uma altura', tops.size > 1,
-      [...tops].sort((a, b) => b - a).join(' / '));
+    const pos = water.positions;
+    const nrm = water.normals;
 
-    const expectedFull = fluidSurfaceHeight(FLUID_MAX);
-    check('a mais alta corresponde ao nivel cheio',
-      tops.has(Math.round(expectedFull * 1000) / 1000),
-      'esperado ' + expectedFull);
+    // --- estanqueidade: dois vertices de face superior na mesma posicao XZ tem
+    // que concordar no Y. Se discordam existe uma fresta ali, e e' exatamente
+    // por essas frestas que a agua "some" quando se olha de raspao.
+    const byXZ = new Map();
+    let sloped = 0;
+    let topVerts = 0;
+    for (let q = 0; q < pos.length / 3; q += 4) {
+      const up = nrm[q * 3 + 1] > 0;
+      const side = nrm[q * 3 + 1] === 0;
+      if (!up && !side) continue; // faces de baixo nao tem superficie
+      const ys = [];
+      // Numa face lateral so' a aresta de cima carrega a superficie (cantos 2 e
+      // 3); a de baixo assenta no piso do bloco. Ela tem que bater exatamente
+      // com o canto correspondente da face de topo vizinha, senao sobra uma
+      // fenda na linha da margem.
+      for (let c = side ? 2 : 0; c < 4; c++) {
+        const i = (q + c) * 3;
+        const key = Math.round(pos[i] * 64) + ':' + Math.round(pos[i + 2] * 64);
+        const y = Math.round(pos[i + 1] * 4096) / 4096;
+        ys.push(y);
+        topVerts++;
+        if (!byXZ.has(key)) byXZ.set(key, new Set());
+        byXZ.get(key).add(y);
+      }
+      if (up && new Set(ys).size > 1) sloped++;
+    }
+
+    let cracks = 0;
+    for (const heights of byXZ.values()) if (heights.size > 1) cracks++;
+
+    check('ha' + "' " + 'faces de topo para inspecionar', topVerts > 0, topVerts + ' vertices');
+    equal('nenhuma fresta na superficie', cracks, 0,
+      'cantos coincidentes tem que ter a mesma altura');
+    check('a superficie realmente inclina', sloped > 0,
+      sloped + ' quads com cantos em alturas diferentes');
   }
+}
+
+console.log('\n--- agua parada continua mesclando');
+{
+  // Um lago plano nao pode perder o greedy meshing por causa da inclinacao:
+  // a superficie inteira esta' na mesma altura, entao tem que virar um quad so'.
+  const world = new World({ seed: 12 });
+  for (let cz = -1; cz <= 1; cz++) {
+    for (let cx = -1; cx <= 1; cx++) {
+      const chunk = new Chunk(cx, cz);
+      for (let z = 0; z < 16; z++) {
+        for (let x = 0; x < 16; x++) {
+          chunk.set(x, 32, z, STONE);
+          chunk.set(x, 33, z, WATER);
+        }
+      }
+      chunk.rebuildDerived();
+      world.addChunk(chunk);
+    }
+  }
+
+  const chunk = world.getChunk(0, 0);
+  const padded = world.buildPadded(chunk, 2);
+  const { water } = meshSection(padded.blocks, padded.light, padded.fluid);
+
+  let topQuads = 0;
+  if (water !== null) {
+    for (let q = 0; q < water.positions.length / 3; q += 4) {
+      if (water.normals[q * 3 + 1] > 0) topQuads++;
+    }
+  }
+  equal('16x16 de agua plana viram um unico quad de topo', topQuads, 1,
+    'sem isso um oceano custaria 256 quads por secao');
 }
 
 /* ----------------------------------------------------------- correnteza */

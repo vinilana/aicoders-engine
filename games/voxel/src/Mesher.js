@@ -80,11 +80,27 @@ const maskSky = new Int32Array(N * N);
 const maskBlk = new Int32Array(N * N);
 const maskUsed = new Uint8Array(N * N);
 /**
- * Per-face flags. Bit 0 marks "this liquid voxel is the surface layer", which
- * has to be part of the merge key: the top of a water column is lowered, and a
- * surface quad must never merge with a submerged one or the two would tear.
+ * How far each of the four quad corners is pulled down from the top of its
+ * block, quantised to a byte per corner and packed into one int.
+ *
+ * A liquid surface is not flat: its height comes from the fluid level, which
+ * varies cell to cell. Storing one drop *per corner* rather than one per quad is
+ * what keeps the surface watertight. Two neighbouring cells at different levels
+ * share the corners along their boundary, so as long as a corner's height is a
+ * function of the corner's position alone, both cells compute the same value and
+ * the sheet is continuous. Give each cell a single flat height instead and every
+ * level boundary opens a slit you can see straight through at a grazing angle.
+ *
+ * It doubles as the merge key: a surface quad must never merge with a submerged
+ * one, nor with a neighbour at a different level.
  */
 const maskFlag = new Int32Array(N * N);
+/**
+ * Which directions a quad may still be extended in. Bit 0 = along u, bit 1 =
+ * along v. Merging is only sound along an edge whose two corner drops are
+ * equal; extending a sloped edge would flatten it and tear the sheet.
+ */
+const maskMerge = new Uint8Array(N * N);
 
 /* ----------------------------------------------------------- mesh builders */
 
@@ -276,6 +292,48 @@ function cornerData(blocks, light, x, y, z, nrm, uAxis, vAxis) {
   }
 }
 
+/* ---------------------------------------------------------- liquid surface */
+
+/**
+ * Height of the liquid surface at one *corner* of the grid, 0..1.
+ *
+ * Deliberately a function of the corner position and nothing else: that is the
+ * property that makes the surface watertight, because both cells sharing a
+ * corner necessarily agree on it.
+ *
+ * The average runs over the liquid cells touching the corner and skips the rest,
+ * so the sheet tapers down towards a shoreline instead of ending in a wall. A
+ * cell with liquid directly above it pins the corner to the top of the block:
+ * that column is full, and the surface has to reach up to meet the water
+ * standing on it.
+ *
+ * @param {Uint16Array} blocks Padded block ids.
+ * @param {Uint8Array} fluidLevels Padded fluid levels.
+ * @param {number} cx Corner coordinate on X (a cell boundary, not a cell).
+ * @param {number} y
+ * @param {number} cz Corner coordinate on Z.
+ * @param {number} liquid Block id of the liquid in question.
+ * @returns {number} 0..1
+ */
+function surfaceCornerHeight(blocks, fluidLevels, cx, y, cz, liquid) {
+  let total = 0;
+  let count = 0;
+  for (let oz = -1; oz <= 0; oz++) {
+    for (let ox = -1; ox <= 0; ox++) {
+      const i = padIndex(cx + ox, y, cz + oz);
+      if (blocks[i] !== liquid) continue;
+      if (blocks[padIndex(cx + ox, y + 1, cz + oz)] === liquid) return 1;
+      total += fluidLevels[i] || FLUID_MAX;
+      count++;
+    }
+  }
+  if (count === 0) return 0;
+  return fluidSurfaceHeight(total / count);
+}
+
+/** Corner drops for the quad being built, quantised 0..255. */
+const _drop = new Int32Array(4);
+
 /* ------------------------------------------------------------------- mesher */
 
 const _corners = new Float32Array(12);
@@ -333,15 +391,40 @@ export function meshSection(blocks, light, fluidLevels) {
 
             const m = j * N + i;
             maskId[m] = here;
-            // For a surface liquid the flag carries its *level*, which drives
-            // how far the top sits below the block ceiling. Zero means "not a
-            // surface": a cell with the same liquid above it is submerged and
-            // fills its block completely. Two quads only merge when the flag
-            // matches, so a sloping stream keeps each step of its profile.
-            maskFlag[m] = (IS_LIQUID[here] === 1 &&
-              blocks[padIndex(x, y + 1, z)] !== here)
-              ? (fluidLevels[padIndex(x, y, z)] || FLUID_MAX)
-              : 0;
+
+            // ---- liquid surface: one drop per corner
+            _drop[0] = 0; _drop[1] = 0; _drop[2] = 0; _drop[3] = 0;
+            const isSurface = IS_LIQUID[here] === 1 &&
+              blocks[padIndex(x, y + 1, z)] !== here &&
+              !(d === 1 && dir < 0); // the underside of a liquid keeps its block
+            if (isSurface) {
+              for (let c = 0; c < 4; c++) {
+                // A top face carries the surface at every corner; a side face
+                // only along its upper edge, since its lower edge sits on the
+                // bottom of the block.
+                if (d !== 1 && CORNER_V[c] < 0) continue;
+                const ou = CORNER_U[c] > 0 ? 1 : 0;
+                const ov = CORNER_V[c] > 0 ? 1 : 0;
+                // Corner position in world XZ. On a top face the quad spans XZ,
+                // so both offsets apply; on a side face the depth axis is fixed
+                // at the face plane and only u varies (v is Y).
+                let cornerX;
+                let cornerZ;
+                if (d === 1) { cornerX = x + ou; cornerZ = z + ov; }
+                else if (d === 0) { cornerX = dir > 0 ? x + 1 : x; cornerZ = z + ou; }
+                else { cornerX = x + ou; cornerZ = dir > 0 ? z + 1 : z; }
+
+                const height = surfaceCornerHeight(blocks, fluidLevels, cornerX, y, cornerZ, here);
+                const q = Math.round((1 - height) * 255);
+                _drop[c] = q < 0 ? 0 : q > 255 ? 255 : q;
+              }
+            }
+            maskFlag[m] = _drop[0] | (_drop[1] << 8) | (_drop[2] << 16) | (_drop[3] << 24);
+            // Extending an edge is only sound when its two corners sit at the
+            // same height; otherwise the merge would straighten a slope.
+            maskMerge[m] = (_drop[0] === _drop[1] && _drop[2] === _drop[3] ? 1 : 0) |
+              (_drop[0] === _drop[3] && _drop[1] === _drop[2] ? 2 : 0);
+
             maskLayer[m] = FACE_LAYERS[here * 6 + face];
             maskAO[m] = _ao[0] | (_ao[1] << 2) | (_ao[2] << 4) | (_ao[3] << 6);
             maskSky[m] = _sky[0] | (_sky[1] << 8) | (_sky[2] << 16) | (_sky[3] << 24);
@@ -361,10 +444,11 @@ export function meshSection(blocks, light, fluidLevels) {
             const sky = maskSky[m];
             const blk = maskBlk[m];
             const flag = maskFlag[m];
+            const merge = maskMerge[m];
 
             // Extend along u.
             let w = 1;
-            while (i + w < N) {
+            while ((merge & 1) !== 0 && i + w < N) {
               const mm = m + w;
               if (maskUsed[mm] === 1 || maskId[mm] !== id || maskLayer[mm] !== layer ||
                   maskAO[mm] !== ao || maskSky[mm] !== sky || maskBlk[mm] !== blk ||
@@ -375,7 +459,7 @@ export function meshSection(blocks, light, fluidLevels) {
             // Extend along v, whole rows only.
             let h = 1;
             outer:
-            while (j + h < N) {
+            while ((merge & 2) !== 0 && j + h < N) {
               const rowBase = (j + h) * N + i;
               for (let k = 0; k < w; k++) {
                 const mm = rowBase + k;
@@ -397,25 +481,20 @@ export function meshSection(blocks, light, fluidLevels) {
             _blk[0] = blk & 255; _blk[1] = (blk >> 8) & 255; _blk[2] = (blk >> 16) & 255; _blk[3] = (blk >>> 24) & 255;
 
             // The face plane sits on the far side of the voxel for +dir.
-            let planeD = dir > 0 ? s + 1 : s;
-
-            // A surface liquid sits slightly below a full block. The drop has to
-            // be applied to the top face AND to the top edge of the side faces,
-            // otherwise the two disagree and leave a visible slit at the
-            // shoreline. On side faces `v` is world Y and `flag` can only be set
-            // on a one-block-tall quad (a voxel with water above is not a
-            // surface voxel), so lowering the +v edge is always well defined.
-            const drop = flag > 0 ? 1 - fluidSurfaceHeight(flag) : 0;
-            if (d === 1 && dir > 0) planeD -= drop;
-            const edgeDrop = (d !== 1) ? drop : 0;
+            const planeD = dir > 0 ? s + 1 : s;
 
             for (let c = 0; c < 4; c++) {
-              const highV = CORNER_V[c] > 0;
-              const cu = i + (CORNER_U[c] > 0 ? w : 0);
-              const cv = j + (highV ? h : 0) - (highV ? edgeDrop : 0);
               _corners[c * 3 + d] = planeD;
-              _corners[c * 3 + u] = cu;
-              _corners[c * 3 + v] = cv;
+              _corners[c * 3 + u] = i + (CORNER_U[c] > 0 ? w : 0);
+              _corners[c * 3 + v] = j + (CORNER_V[c] > 0 ? h : 0);
+
+              // Pull the corner down to the liquid surface. On a top face that
+              // is the depth axis; on a side face it is v, which is world Y.
+              // Either way it moves the vertex down in Y, and both faces read
+              // the same corner heights, so the top and the side of a shoreline
+              // meet exactly instead of leaving a slit between them.
+              const drop = ((flag >>> (c * 8)) & 255) / 255;
+              if (drop !== 0) _corners[c * 3 + (d === 1 ? d : v)] -= drop;
             }
 
             const flipDiagonal = (_ao[0] + _ao[2]) > (_ao[1] + _ao[3]);

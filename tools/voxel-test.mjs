@@ -115,6 +115,29 @@ async function main() {
     }
     if (WALK) await page.evaluate('clearInterval(window.game._walkTimer)');
 
+    // --- prepara o caso que expoe proxy de broadphase obsoleto.
+    //
+    // Uma malha de chunk nunca se move, entao o unico jeito de a sua extensao
+    // mudar e' a geometria ser trocada no lugar. Derramar agua onde nao havia
+    // nenhuma cria uma malha *nova*, cujo proxy nasce correto — nao serve. E'
+    // preciso primeiro deixar uma poca virar malha e so' depois aumenta-la,
+    // com frames de verdade no meio para o worker de meshing entregar.
+    await page.evaluate(`(() => {
+      const g = window.game, w = g.world, p = g.player;
+      // Bem longe da poca que o probe usa mais abaixo: agua espalha 7 celulas,
+      // e duas pocas que se encontram invalidam as duas medicoes.
+      const bx = Math.floor(p.body.x) - 20, bz = Math.floor(p.body.z) - 20;
+      window.__pour = { bx, bz, y: w.surfaceY(bx, bz) + 1 };
+      if (window.__pour.y > 0) w.setBlock(bx, window.__pour.y, bz, 16);
+    })()`);
+    await sleep(4000);
+    await page.evaluate(`(() => {
+      const g = window.game, w = g.world;
+      const { bx, bz, y } = window.__pour;
+      if (y > 0) for (let d = 1; d <= 6; d++) w.setBlock(bx, y, bz + d, 16);
+    })()`);
+    await sleep(5000);
+
     const report = await page.evaluate(`(() => {
       const g = window.game;
       const w = g.world;
@@ -181,6 +204,29 @@ async function main() {
         }
       }
 
+      // --- o proxy do broadphase acompanha o remesh. Uma secao de chunk nunca
+      // se move, entao trocar a geometria no lugar e' a unica forma de ela mudar
+      // de tamanho. Conferir boundingBoxWorld nao serve: o ChunkManager ja' o
+      // recalcula na mao. O que fica para tras e' o proxy dentro do BVH, e e'
+      // ele que o frustum culling consulta — por isso o sintoma e' agua que
+      // some conforme o angulo da camera, e nao agua que nunca aparece.
+      let staleBounds = 0;
+      let boundsChecked = 0;
+      const probe = { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 0, z: 0 } };
+      for (const node of g.engine.scene.meshes) {
+        if (node._bvhProxy === -1 || node.geometry === null) continue;
+        if (node.name.indexOf('chunk_') !== 0) continue;
+        boundsChecked++;
+        g.engine.scene.bvh.getProxyBounds(node._bvhProxy, probe);
+        const w = node.boundingBoxWorld;
+        const drift = Math.max(
+          Math.abs(probe.min.x - w.min.x), Math.abs(probe.max.x - w.max.x),
+          Math.abs(probe.min.y - w.min.y), Math.abs(probe.max.y - w.max.y),
+          Math.abs(probe.min.z - w.min.z), Math.abs(probe.max.z - w.max.z),
+        );
+        if (drift > 1e-3) staleBounds++;
+      }
+
       // --- luz: o ceu deve estar iluminado acima da superficie
       const surface = w.surfaceY(bx, bz);
       const skyAbove = w.getSkyLight(bx, surface + 2, bz);
@@ -204,6 +250,7 @@ async function main() {
         raycastHit: before,
         lightQueue: g.chunks.stats.lightQueue,
         fluidPlaced, fluidSpread, fluidInvariant, fluidDrained, fluidRemeshed,
+        staleBounds, boundsChecked,
         pendingGenerate: g.chunks.stats.pendingGenerate,
         fps: Math.round(g.engine.time.fps),
         error: g.chunks.lastError,
@@ -299,6 +346,8 @@ async function main() {
         report.fluidRemeshed + ' secoes sujas'],
       ['sem a fonte a agua seca', report.fluidDrained === 0,
         report.fluidDrained + ' celulas restantes'],
+      ['proxy do broadphase em dia apos remesh', report.staleBounds === 0 && report.boundsChecked > 0,
+        report.staleBounds + ' obsoletos de ' + report.boundsChecked + ' malhas'],
       ['edicao de bloco funciona', report.brokeOk === true && report.afterBreak === 0 &&
         report.placedOk === true && report.afterPlace === report.original],
       ['jogador assentou no solo', report.suspended === false],

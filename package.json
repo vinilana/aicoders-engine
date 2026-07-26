@@ -1,6 +1,6 @@
 {
   "name": "aicoders-engine",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Engine 3D WebGL2 escrita do zero em JavaScript puro. Zero dependencias de runtime, zero build: os modulos sao servidos crus ao navegador.",
   "license": "MIT",
@@ -102,7 +102,7 @@
   ],
   "scripts": {
     "start": "node tools/serve.mjs",
-    "check": "node tools/gen-barrels.mjs --check && node tools/test-math.mjs && node tools/physics-test.mjs && node tools/fluid-test.mjs && node tools/voxel-fluid-test.mjs && node tools/kart-handling.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs",
+    "check": "node tools/gen-barrels.mjs --check && node tools/test-math.mjs && node tools/scene-test.mjs && node tools/physics-test.mjs && node tools/fluid-test.mjs && node tools/voxel-fluid-test.mjs && node tools/kart-handling.mjs && node tools/check-imports.mjs && node tools/check-glsl.mjs && node tools/smoke.mjs",
     "check:browser": "node tools/browser-test.mjs && node tools/demo-water-test.mjs && node tools/starter-test.mjs && node tools/kart-test.mjs && node tools/voxel-test.mjs",
     "check:package": "node tools/check-package.mjs",
     "barrels": "node tools/gen-barrels.mjs",

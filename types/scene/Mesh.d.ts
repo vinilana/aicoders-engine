@@ -8,8 +8,19 @@ export class Mesh extends Node3D {
      * @param {Object|Object[]|null} [material=null]
      */
     constructor(geometry?: import('../render/Geometry.js').Geometry | null, material?: any | any[] | null);
-    /** @type {import('../render/Geometry.js').Geometry|null} */
-    geometry: import('../render/Geometry.js').Geometry | null;
+    /** @private @type {import('../render/Geometry.js').Geometry|null} */
+    private _geometry;
+    /**
+     * @type {number} Bumped every time the geometry object is replaced.
+     *
+     * A mesh that never moves but whose geometry is rebuilt — a voxel chunk being
+     * remeshed, a procedural surface, a streamed LOD — changes its bounds without
+     * changing its matrix. Everything downstream keyed off `worldMatrixVersion`
+     * alone would conclude that nothing happened and keep the bounds of the very
+     * first geometry, forever. Versioning the geometry separately is what lets
+     * both `updateWorldBounds()` and the broad phase notice.
+     */
+    _geometryVersion: number;
     /** @type {Object|Object[]|null} */
     material: any | any[] | null;
     /** World space bounding volumes, refreshed by `updateWorldBounds()`. */
@@ -26,14 +37,30 @@ export class Mesh extends Node3D {
      * when it was added and disappears as soon as it moves.
      */
     _bvhVersion: number;
+    /** @type {number} Geometry version the broad phase proxy was built from. */
+    _bvhGeometryVersion: number;
     /** @private worldMatrixVersion used the last time bounds were rebuilt. */
     private _boundsVersion;
+    /** @private geometry version used the last time bounds were rebuilt. */
+    private _boundsGeometryVersion;
     /** @private Center of the last broadphase proxy, used to derive displacement. */
     private _prevCenterX;
     /** @private */
     private _prevCenterY;
     /** @private */
     private _prevCenterZ;
+    /**
+     * Replacing the geometry invalidates the world bounds and the broad phase
+     * proxy. Going through an accessor rather than a plain field is deliberate:
+     * swapping geometry in place is the natural way to rebuild a static mesh, and
+     * it used to leave the mesh culled against the bounds of whatever it held
+     * first — visible from one angle and gone from another.
+     *
+     * @param {import('../render/Geometry.js').Geometry|null} value
+     */
+    set geometry(arg: import("../render/Geometry.js").Geometry);
+    /** @returns {import('../render/Geometry.js').Geometry|null} */
+    get geometry(): import("../render/Geometry.js").Geometry;
     /**
      * Transforms the geometry bounds into world space. The work is skipped while
      * the world matrix does not change.

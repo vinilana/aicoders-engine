@@ -3,6 +3,54 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento conforme [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.2.1] — 2026-07-26
+
+Duas causas independentes de "a agua some dependendo do angulo que se olha".
+Uma e' da engine e atinge qualquer malha, nao so' agua.
+
+### Corrigido
+
+- **Proxy do broadphase congelado quando a geometria e' trocada no lugar.**
+
+  `Scene.updateMatrices` marcava uma malha para atualizar o BVH so' quando a
+  *matriz* dela mudava. Uma malha que nunca se move mas cuja geometria e'
+  reconstruida — uma secao de voxel remeshada, uma superficie procedural, um LOD
+  transmitido — muda de tamanho sem mudar de matriz, e a cena concluia que nada
+  aconteceu. O proxy ficava com os limites da **primeira** geometria, para
+  sempre. `updateWorldBounds()` tambem desistia, pela mesma razao: a guarda dele
+  comparava com `worldMatrixVersion`.
+
+  O sintoma nunca e' "sumiu", e' "some dependendo do angulo", porque a malha
+  continua sendo desenhada sempre que os limites obsoletos por acaso caem dentro
+  do frustum. Medido no exemplo voxel: **16 de 313 secoes com proxy errado, com
+  desvio de ate 12 blocos** numa secao de 16 — o proxy apontava para outra
+  regiao.
+
+  `Mesh.geometry` passa a ser um acessor que versiona a troca, e tanto os
+  limites de mundo quanto o broadphase consultam essa versao. Quem ja' trocava
+  geometria por atribuicao direta e' corrigido sem mudar uma linha. `markMeshDirty`
+  continua existindo para o caso de `frustumCulled`.
+
+  Coberto por `tools/scene-test.mjs`, novo, que tambem trava a regressao do corpo
+  do kart (matriz atualizada fora do walk da cena).
+
+### Exemplo voxel
+
+- **A superficie da agua e' uma lamina continua, nao degraus por celula.**
+
+  A altura passou a ser calculada por *canto* e nao por celula, a partir da media
+  dos niveis que tocam aquele canto. Como a altura vira funcao so' da posicao do
+  canto, duas celulas vizinhas concordam por construcao e a lamina e' estanque.
+
+  Antes, uma celula nivel 8 encostada numa nivel 7 deixava uma fresta aberta:
+  nao ha' parede entre duas celulas de agua (`facesVisible` funde liquidos
+  iguais), entao a diferenca de altura virava um vao por onde se enxergava
+  atraves da superficie de raspao. Uma poca pequena tinha **112 frestas**.
+
+  De quebra e' o que faz a agua corrente *parecer* corrente: a superficie
+  visivelmente desce na direcao do fluxo em vez de descer em degraus. Agua
+  parada continua mesclando — um lago plano de 16x16 ainda vira um unico quad.
+
 ## [1.2.0] — 2026-07-25
 
 Fluido em grade. Saiu do exemplo voxel, mas a regra inteira mora na engine e nao
@@ -171,6 +219,7 @@ Primeira versao publicavel. A engine passa a ser consumivel como pacote.
   WSL2 com rede espelhada, onde um processo do Windows segura a porta sem
   aparecer no `ss`.
 
+[1.2.1]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.2.1
 [1.2.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.2.0
 [1.1.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.0.0

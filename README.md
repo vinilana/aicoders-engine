@@ -615,7 +615,8 @@ Duas regras evitam que o resultado pareca difusao em vez de agua:
 estiver dentro dela.
 
 Verificado em `tools/fluid-test.mjs` (43 asserções sobre o solver) e `tools/voxel-fluid-test.mjs`
-(33 sobre a integracao no jogo voxel, incluindo o caso de cavar ao lado do oceano gerado).
+(35 sobre a integracao no jogo voxel, incluindo cavar ao lado do oceano gerado e a estanqueidade da
+superficie desenhada).
 
 ### Input
 

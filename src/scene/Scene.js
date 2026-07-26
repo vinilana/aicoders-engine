@@ -192,7 +192,9 @@ export class Scene extends Node3D {
       // broad phase. Comparing versions instead makes the result independent of
       // who updated the matrix.
       if (node.isMesh === true &&
-          (changed === 1 || node.worldMatrixVersion !== node._bvhVersion)) {
+          (changed === 1 ||
+           node.worldMatrixVersion !== node._bvhVersion ||
+           node._geometryVersion !== node._bvhGeometryVersion)) {
         dirty[dirtyCount++] = node;
       }
       const children = node.children;
@@ -243,6 +245,7 @@ export class Scene extends Node3D {
       // Records which world matrix these bounds came from, so the walk above
       // can tell a stale proxy from a current one.
       mesh._bvhVersion = mesh.worldMatrixVersion;
+      mesh._bvhGeometryVersion = mesh._geometryVersion;
     }
     this._dirtyCount = 0;
     return this;

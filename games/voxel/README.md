@@ -45,6 +45,15 @@ sobre uma grade abstrata e não sabe o que é um chunk. O que este jogo fornece 
 os quatro acessores (`getLevel`, `setLevel`, `isSolid`, `isSource`) e a tradução
 entre nível e id de bloco.
 
+A superfície é uma **lâmina contínua**, não degraus por célula: a altura é
+calculada por *canto*, a partir da média dos níveis que tocam aquele canto. Como
+vira função só da posição do canto, células vizinhas concordam por construção.
+Isso importa porque não existe parede entre duas células de água — `facesVisible`
+funde líquidos iguais — então qualquer diferença de altura entre vizinhas viraria
+uma fresta por onde se enxerga através da água de raspão. É também o que faz a
+água correr visivelmente para baixo em vez de descer em degraus. Água parada
+continua mesclando: um lago plano de 16×16 ainda vira um único quad.
+
 **Água gerada é fonte; água que escorreu não é.** Essa única distinção é o que
 faz um oceano se sustentar sem custo nenhum em repouso (fontes nunca mudam, então
 nunca entram na fila) e ao mesmo tempo faz uma poça derramada secar quando o

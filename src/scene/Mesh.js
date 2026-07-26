@@ -76,8 +76,21 @@ function packPositions(attr) {
 export class Mesh extends Node3D {
   isMesh = true;
 
-  /** @type {import('../render/Geometry.js').Geometry|null} */
-  geometry = null;
+  /** @private @type {import('../render/Geometry.js').Geometry|null} */
+  _geometry = null;
+
+  /**
+   * @type {number} Bumped every time the geometry object is replaced.
+   *
+   * A mesh that never moves but whose geometry is rebuilt — a voxel chunk being
+   * remeshed, a procedural surface, a streamed LOD — changes its bounds without
+   * changing its matrix. Everything downstream keyed off `worldMatrixVersion`
+   * alone would conclude that nothing happened and keep the bounds of the very
+   * first geometry, forever. Versioning the geometry separately is what lets
+   * both `updateWorldBounds()` and the broad phase notice.
+   */
+  _geometryVersion = 0;
+
   /** @type {Object|Object[]|null} */
   material = null;
 
@@ -98,8 +111,13 @@ export class Mesh extends Node3D {
    */
   _bvhVersion = -1;
 
+  /** @type {number} Geometry version the broad phase proxy was built from. */
+  _bvhGeometryVersion = -1;
+
   /** @private worldMatrixVersion used the last time bounds were rebuilt. */
   _boundsVersion = -1;
+  /** @private geometry version used the last time bounds were rebuilt. */
+  _boundsGeometryVersion = -1;
   /** @private Center of the last broadphase proxy, used to derive displacement. */
   _prevCenterX = 0;
   /** @private */
@@ -119,6 +137,24 @@ export class Mesh extends Node3D {
     this.receiveShadow = true;
   }
 
+  /** @returns {import('../render/Geometry.js').Geometry|null} */
+  get geometry() { return this._geometry; }
+
+  /**
+   * Replacing the geometry invalidates the world bounds and the broad phase
+   * proxy. Going through an accessor rather than a plain field is deliberate:
+   * swapping geometry in place is the natural way to rebuild a static mesh, and
+   * it used to leave the mesh culled against the bounds of whatever it held
+   * first — visible from one angle and gone from another.
+   *
+   * @param {import('../render/Geometry.js').Geometry|null} value
+   */
+  set geometry(value) {
+    if (this._geometry === value) return;
+    this._geometry = value;
+    this._geometryVersion++;
+  }
+
   /**
    * Transforms the geometry bounds into world space. The work is skipped while
    * the world matrix does not change.
@@ -126,10 +162,13 @@ export class Mesh extends Node3D {
    * @returns {Mesh} this
    */
   updateWorldBounds(force = false) {
-    const geometry = this.geometry;
+    const geometry = this._geometry;
     if (geometry === null) return this;
-    if (force === false && this._boundsVersion === this.worldMatrixVersion) return this;
+    if (force === false &&
+        this._boundsVersion === this.worldMatrixVersion &&
+        this._boundsGeometryVersion === this._geometryVersion) return this;
     this._boundsVersion = this.worldMatrixVersion;
+    this._boundsGeometryVersion = this._geometryVersion;
 
     if (geometry.boundingBox === null || geometry.boundingBox === undefined) geometry.computeBoundingBox();
     if (geometry.boundingSphere === null || geometry.boundingSphere === undefined) geometry.computeBoundingSphere();
