@@ -9,7 +9,7 @@
 
 import { AABBBody, boxIntersectsSolid } from './VoxelPhysics.js';
 import { raycastVoxel, VoxelHit } from './VoxelRaycast.js';
-import { AIR, PLACEABLE, IS_SOLID, blockName } from './Blocks.js';
+import { AIR, WATER, PLACEABLE, IS_SOLID, blockName } from './Blocks.js';
 
 /** How far the player can reach, in blocks. */
 export const REACH = 6;
@@ -158,6 +158,19 @@ export class Interaction {
     const z = this.hit.z + this.hit.nz;
 
     const id = this.selectedBlock;
+
+    // Water toggles. The raycast passes straight through liquids on purpose —
+    // you have to be able to dig the block behind a waterfall — so aiming at a
+    // source is impossible and water placed by hand would otherwise be
+    // permanent. Placing onto a cell that already holds a source scoops it back
+    // up instead, which is the bucket both ways round.
+    if (id === WATER && this.world.isFluidSource(x, y, z)) {
+      if (this.world.setBlock(x, y, z, AIR)) {
+        this.placed++;
+        return true;
+      }
+      return false;
+    }
 
     // Refuse anything that would intersect the player's own box.
     if (IS_SOLID[id] === 1 && this._wouldTrapPlayer(x, y, z)) return false;

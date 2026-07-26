@@ -3,9 +3,10 @@
  *
  * GERADO por tools/gen-barrels.mjs. Nao edite a mao: rode o gerador.
  * Existe para o subpath export do pacote, por exemplo
- *   import { CharacterController } from 'aicoders-engine/physics';
+ *   import { CellularFluid } from 'aicoders-engine/physics';
  */
 
+export { CellularFluid } from './CellularFluid.js';
 export { CharacterController } from './CharacterController.js';
 export { CollisionWorld, StaticCollider, createSweepHit } from './CollisionWorld.js';
 export { Raycaster, getMeshTriangleData } from './Raycaster.js';

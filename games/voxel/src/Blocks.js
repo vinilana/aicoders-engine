@@ -223,7 +223,7 @@ export function facesVisible(here, neighbour) {
  */
 export const PLACEABLE = [
   GRASS, DIRT, STONE, COBBLESTONE, SAND, SANDSTONE,
-  LOG, PLANKS, LEAVES, GLASS, GLOWSTONE, SNOW,
+  LOG, PLANKS, WATER, LEAVES, GLASS, GLOWSTONE, SNOW,
 ];
 
 /**

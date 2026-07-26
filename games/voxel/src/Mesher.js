@@ -18,6 +18,7 @@
  */
 
 import { AIR, IS_OPAQUE, IS_LIQUID, FACE_LAYERS, facesVisible } from './Blocks.js';
+import { FLUID_MAX, fluidSurfaceHeight } from './Chunk.js';
 
 /** Padded neighbourhood edge length. */
 export const PAD = 18;
@@ -290,7 +291,7 @@ const _nrm = [0, 0, 0];
  * @param {Uint8Array} light Padded 18^3 packed light.
  * @returns {{opaque: Object|null, water: Object|null}}
  */
-export function meshSection(blocks, light) {
+export function meshSection(blocks, light, fluidLevels) {
   const solid = new MeshBuilder(768);
   const fluid = new MeshBuilder(128);
 
@@ -332,8 +333,15 @@ export function meshSection(blocks, light) {
 
             const m = j * N + i;
             maskId[m] = here;
+            // For a surface liquid the flag carries its *level*, which drives
+            // how far the top sits below the block ceiling. Zero means "not a
+            // surface": a cell with the same liquid above it is submerged and
+            // fills its block completely. Two quads only merge when the flag
+            // matches, so a sloping stream keeps each step of its profile.
             maskFlag[m] = (IS_LIQUID[here] === 1 &&
-              blocks[padIndex(x, y + 1, z)] !== here) ? 1 : 0;
+              blocks[padIndex(x, y + 1, z)] !== here)
+              ? (fluidLevels[padIndex(x, y, z)] || FLUID_MAX)
+              : 0;
             maskLayer[m] = FACE_LAYERS[here * 6 + face];
             maskAO[m] = _ao[0] | (_ao[1] << 2) | (_ao[2] << 4) | (_ao[3] << 6);
             maskSky[m] = _sky[0] | (_sky[1] << 8) | (_sky[2] << 16) | (_sky[3] << 24);
@@ -397,7 +405,7 @@ export function meshSection(blocks, light) {
             // shoreline. On side faces `v` is world Y and `flag` can only be set
             // on a one-block-tall quad (a voxel with water above is not a
             // surface voxel), so lowering the +v edge is always well defined.
-            const drop = flag === 1 ? 0.12 : 0;
+            const drop = flag > 0 ? 1 - fluidSurfaceHeight(flag) : 0;
             if (d === 1 && dir > 0) planeD -= drop;
             const edgeDrop = (d !== 1) ? drop : 0;
 

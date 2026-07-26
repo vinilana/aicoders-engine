@@ -21,7 +21,7 @@
  *    `registerShadowShader`, `registerDebugShader`) or `registerAllShaders`.
  */
 /** Engine version string. */
-export const VERSION: "1.1.0";
+export const VERSION: "1.2.0";
 export { Vec2 } from "./math/Vec2.js";
 export { Vec3 } from "./math/Vec3.js";
 export { Vec4 } from "./math/Vec4.js";
@@ -64,6 +64,7 @@ export { DebugRenderer } from "./render/DebugRenderer.js";
 export { AnimationClip } from "./animation/AnimationClip.js";
 export { CharacterController } from "./physics/CharacterController.js";
 export { WaterVolume } from "./physics/WaterVolume.js";
+export { CellularFluid } from "./physics/CellularFluid.js";
 export { Input } from "./input/Input.js";
 export { OrbitControls } from "./input/OrbitControls.js";
 export { FirstPersonControls } from "./input/FirstPersonControls.js";

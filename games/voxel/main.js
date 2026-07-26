@@ -130,8 +130,18 @@ class VoxelGame {
   _bindEvents(canvas) {
     const input = this.engine.input;
 
+    // While the pointer is locked the game owns the keyboard, so Ctrl+W does not
+    // close the tab mid-dig and Ctrl+D does not open a bookmark dialog. The
+    // Keyboard Lock API only grants this from a user gesture, which is why it
+    // rides along with the click that starts play rather than running at boot.
+    input.captureMode = 'pointerlock';
+    input.captureAllShortcuts = true;
+
     canvas.addEventListener('mousedown', () => {
-      if (!input.pointerLocked) input.requestPointerLock();
+      if (!input.pointerLocked) {
+        input.requestPointerLock();
+        input.enterGameMode(canvas);
+      }
     });
 
     // Right click must not open the browser menu while playing.
@@ -180,7 +190,7 @@ class VoxelGame {
     }
 
     this.player.update(step);
-    this.chunks.update(this.player.body.x, this.player.body.z);
+    this.chunks.update(this.player.body.x, this.player.body.z, step);
     this.interaction.update(step);
 
     // Underwater tint follows the camera, not the feet.
@@ -273,6 +283,9 @@ class VoxelGame {
       ['secoes', stats.sectionsDrawn + ' malhas'],
       ['workers', stats.generating + ' gerando, ' + stats.meshing + ' meshing'],
       ['fila de luz', formatNumber(stats.lightQueue)],
+      ['agua', stats.fluidQueue > 0
+        ? formatNumber(stats.fluidQueue) + ' na fila, ' + stats.fluidChanged + ' movendo'
+        : 'parada'],
       ['triangulos residentes', formatNumber(Math.round(stats.trianglesResident))],
       ['alvo', hit.hit ? blockName(hit.block) + ' @ ' + hit.x + ',' + hit.y + ',' + hit.z : '-'],
       ['selecionado', this.interaction.selectedName],

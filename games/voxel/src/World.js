@@ -6,17 +6,19 @@
  * indices and never has to bounds check.
  */
 
-import { AIR, IS_SOLID, IS_LIQUID, LIGHT_ABSORB } from './Blocks.js';
+import { AIR, WATER, IS_SOLID, IS_LIQUID, LIGHT_ABSORB } from './Blocks.js';
 import {
   Chunk, CHUNK_X, CHUNK_Z, WORLD_HEIGHT, SECTION_H, SECTION_COUNT,
-  STRIDE_Z, STRIDE_Y,
+  STRIDE_Z, STRIDE_Y, FLUID_MAX, FLUID_LEVEL_MASK, FLUID_SOURCE_BIT,
 } from './Chunk.js';
 import { PAD, PAD_VOLUME, padIndex } from './Mesher.js';
 import { Lighting } from './Lighting.js';
+import { VoxelFluid } from './VoxelFluid.js';
 
 /** Scratch neighbourhood buffers, reused for every section meshed. */
 const _padBlocks = new Uint16Array(PAD_VOLUME);
 const _padLight = new Uint8Array(PAD_VOLUME);
+const _padFluid = new Uint8Array(PAD_VOLUME);
 
 /**
  * A sparse voxel world.
@@ -35,6 +37,12 @@ export class World {
 
     /** @type {Lighting} */
     this.lighting = new Lighting(this, { budget: options.lightBudget });
+
+    /** @type {VoxelFluid} */
+    this.fluid = new VoxelFluid(this, {
+      flowInterval: options.flowInterval,
+      budget: options.fluidBudget,
+    });
 
     /**
      * Sections whose mesh no longer matches the data. Stored as
@@ -104,6 +112,7 @@ export class World {
     // shared face and seeds whichever is brighter, so it already covers the
     // neighbours' side of the exchange.
     this.lighting.seedBorders(chunk);
+    this.fluid.seedBorders(chunk);
   }
 
   /**
@@ -186,9 +195,74 @@ export class World {
     chunk.modified = true;
     this.editCount++;
 
+    // Placing water by hand creates a source, the way emptying a bucket does.
+    // Anything else clears the cell: a block dropped into a river displaces the
+    // water rather than trapping a level under itself.
+    if (id === WATER) chunk.setFluidSource(lx, y, lz, true);
+    else chunk.clearFluid(lx, y, lz);
+
     this._dirtyAround(chunk, lx, y, lz);
     this.lighting.onBlockChanged(x, y, z, prev, id);
+    // Digging *beside* water changes nothing about the water cell itself, so
+    // the neighbourhood has to be woken explicitly or the flow never starts.
+    this.fluid.markDirty(x, y, z);
     return true;
+  }
+
+  /* ---------------------------------------------------------- fluid access */
+
+  /** @returns {number} 0..FLUID_MAX */
+  getFluidLevel(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return 0;
+    const chunk = this.getChunk(x >> 4, z >> 4);
+    if (chunk === null) return 0;
+    return chunk.fluid[(x & 15) + (z & 15) * STRIDE_Z + y * STRIDE_Y] & FLUID_LEVEL_MASK;
+  }
+
+  /** @returns {boolean} */
+  isFluidSource(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return false;
+    const chunk = this.getChunk(x >> 4, z >> 4);
+    if (chunk === null) return false;
+    return (chunk.fluid[(x & 15) + (z & 15) * STRIDE_Z + y * STRIDE_Y] & FLUID_SOURCE_BIT) !== 0;
+  }
+
+  /**
+   * The simulation's write path.
+   *
+   * Separate from `setBlock` on purpose. `setBlock` is the gameplay path and
+   * resets the fluid state of the cell it touches; routing the solver through it
+   * would turn every drop of flowing water into a fresh source, and the world
+   * would flood without limit.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} z
+   * @param {number} level 0..FLUID_MAX
+   */
+  applyFluidLevel(x, y, z, level) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const chunk = this.getChunk(x >> 4, z >> 4);
+    if (chunk === null) return;
+
+    const lx = x & 15;
+    const lz = z & 15;
+    const prevBlock = chunk.get(lx, y, lz);
+    // Never flood a solid cell, whatever the solver believes.
+    if (level > 0 && prevBlock !== AIR && prevBlock !== WATER) return;
+
+    chunk.setFluidLevel(lx, y, lz, level);
+    chunk.modified = true;
+
+    const nextBlock = level > 0 ? WATER : (prevBlock === WATER ? AIR : prevBlock);
+    if (nextBlock !== prevBlock) {
+      chunk.set(lx, y, lz, nextBlock);
+      this.lighting.onBlockChanged(x, y, z, prevBlock, nextBlock);
+    }
+
+    // Remesh even when the block id did not change: the surface height of a
+    // water cell is its level, so 5 -> 4 is a visible change.
+    this._dirtyAround(chunk, lx, y, lz);
   }
 
   /**
@@ -319,6 +393,7 @@ export class World {
     const baseZ = chunk.cz * CHUNK_Z;
     const blocks = chunk.blocks;
     const light = chunk.light;
+    const fluid = chunk.fluid;
 
     // --- interior: 16 x 16 x 16 straight from the column
     for (let y = 0; y < SECTION_H; y++) {
@@ -329,6 +404,7 @@ export class World {
         for (let x = 0; x < CHUNK_X; x++) {
           _padBlocks[dst + x] = blocks[src + x];
           _padLight[dst + x] = light[src + x];
+          _padFluid[dst + x] = fluid[src + x] & FLUID_LEVEL_MASK;
         }
       }
     }
@@ -347,12 +423,14 @@ export class World {
             // Below bedrock: treat as solid so the bottom face is never drawn.
             _padBlocks[pi] = AIR;
             _padLight[pi] = 0;
+            _padFluid[pi] = 0;
             continue;
           }
           if (wy >= WORLD_HEIGHT) {
             // Above the world: open sky at full strength.
             _padBlocks[pi] = AIR;
             _padLight[pi] = 0xf0;
+            _padFluid[pi] = 0;
             continue;
           }
 
@@ -364,16 +442,18 @@ export class World {
             // border does not flash black before the chunk arrives.
             _padBlocks[pi] = AIR;
             _padLight[pi] = 0xf0;
+            _padFluid[pi] = 0;
             continue;
           }
           const i = (wx & 15) + (wz & 15) * STRIDE_Z + wy * STRIDE_Y;
           _padBlocks[pi] = nc.blocks[i];
           _padLight[pi] = nc.light[i];
+          _padFluid[pi] = nc.fluid[i] & FLUID_LEVEL_MASK;
         }
       }
     }
 
-    return { blocks: _padBlocks, light: _padLight };
+    return { blocks: _padBlocks, light: _padLight, fluid: _padFluid };
   }
 
   /**
@@ -396,6 +476,7 @@ export class World {
     this.chunks.clear();
     this.dirtySections.clear();
     this.lighting.clear();
+    this.fluid.clear();
     this._invalidateCache();
   }
 }

@@ -1,3 +1,4 @@
+export { CellularFluid } from "./CellularFluid.js";
 export { CharacterController } from "./CharacterController.js";
 export { WaterVolume } from "./WaterVolume.js";
 export { CollisionWorld, StaticCollider, createSweepHit } from "./CollisionWorld.js";

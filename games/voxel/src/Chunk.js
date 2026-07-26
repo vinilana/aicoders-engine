@@ -11,7 +11,41 @@
  * mesher walks slices, so both get sequential reads.
  */
 
-import { AIR, IS_OPAQUE, LIGHT_ABSORB } from './Blocks.js';
+import { AIR, WATER, IS_OPAQUE, LIGHT_ABSORB } from './Blocks.js';
+
+/**
+ * Fluid cells are stored alongside blocks, one byte each: the low nibble is the
+ * level and bit 7 marks an inexhaustible source.
+ *
+ * The level has to live outside the block id. Encoding it as eight separate
+ * water ids would multiply the block table, and every table indexed by id
+ * (textures, light absorption, face culling) along with it — for what is really
+ * one extra attribute of one block.
+ */
+export const FLUID_MAX = 8;
+export const FLUID_LEVEL_MASK = 0x0f;
+export const FLUID_SOURCE_BIT = 0x80;
+
+/**
+ * Height of a full liquid surface inside its cell. Slightly under a whole block
+ * so a shoreline reads as water rather than as a slab flush with the ground.
+ */
+export const FLUID_SURFACE_TOP = 0.875;
+
+/**
+ * Visual height of a fluid cell, as a fraction of the block.
+ *
+ * Lives here, with the storage format, because the mesher and the physics both
+ * need it and they must not disagree: a surface drawn at one height and swum in
+ * at another is the sort of mismatch that shows up as a player floating a few
+ * centimetres above a river.
+ *
+ * @param {number} level 0..FLUID_MAX
+ * @returns {number}
+ */
+export function fluidSurfaceHeight(level) {
+  return (level / FLUID_MAX) * FLUID_SURFACE_TOP;
+}
 
 /** Horizontal chunk size, in blocks. */
 export const CHUNK_X = 16;
@@ -68,6 +102,8 @@ export class Chunk {
     this.blocks = new Uint16Array(CHUNK_VOLUME);
     /** @type {Uint8Array} Packed light: high nibble sky, low nibble block. */
     this.light = new Uint8Array(CHUNK_VOLUME);
+    /** @type {Uint8Array} Fluid: low nibble level, bit 7 source. */
+    this.fluid = new Uint8Array(CHUNK_VOLUME);
     /**
      * @type {Uint8Array} Per-column height of the highest light-blocking block
      * plus one, i.e. the Y at which skylight is still full strength.
@@ -157,9 +193,53 @@ export class Chunk {
     }
   }
 
-  /** Recomputes the heightmap and the per-section counters from scratch. */
+  /** @returns {number} fluid level 0..FLUID_MAX */
+  getFluidLevel(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return 0;
+    return this.fluid[x + z * STRIDE_Z + y * STRIDE_Y] & FLUID_LEVEL_MASK;
+  }
+
+  /** @returns {boolean} true for cells held full forever. */
+  isFluidSource(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return false;
+    return (this.fluid[x + z * STRIDE_Z + y * STRIDE_Y] & FLUID_SOURCE_BIT) !== 0;
+  }
+
+  /**
+   * Writes a fluid level, leaving the source bit alone.
+   * @param {number} level 0..FLUID_MAX
+   */
+  setFluidLevel(x, y, z, level) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const i = x + z * STRIDE_Z + y * STRIDE_Y;
+    this.fluid[i] = (this.fluid[i] & FLUID_SOURCE_BIT) | (level & FLUID_LEVEL_MASK);
+  }
+
+  /** Sets or clears the source bit, filling the cell when it becomes one. */
+  setFluidSource(x, y, z, isSource) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const i = x + z * STRIDE_Z + y * STRIDE_Y;
+    this.fluid[i] = isSource ? (FLUID_SOURCE_BIT | FLUID_MAX)
+      : (this.fluid[i] & FLUID_LEVEL_MASK);
+  }
+
+  /** Clears both level and source bit. */
+  clearFluid(x, y, z) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    this.fluid[x + z * STRIDE_Z + y * STRIDE_Y] = 0;
+  }
+
+  /** Recomputes the heightmap, the per-section counters and the fluid from scratch. */
   rebuildDerived() {
     const blocks = this.blocks;
+    const fluid = this.fluid;
+
+    // Generated water is a source. Oceans and lakes must not drain themselves
+    // the moment the simulation starts, and a hole dug in a seabed should keep
+    // pouring rather than empty a finite lake one cell at a time.
+    for (let i = 0; i < CHUNK_VOLUME; i++) {
+      fluid[i] = blocks[i] === WATER ? (FLUID_SOURCE_BIT | FLUID_MAX) : 0;
+    }
 
     for (let i = 0; i < SECTION_COUNT; i++) this.sections[i].nonAir = 0;
 

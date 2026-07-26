@@ -89,7 +89,7 @@ JavaScript puro; o TypeScript e um devDependency usado so por `npm run types`.
 | `aicoders-engine/core` | Engine, Time, EventBus, Pool, Logger |
 | `aicoders-engine/scene` | Node3D, Scene, cameras, Mesh, luzes, LOD |
 | `aicoders-engine/render` | Renderer, materiais, texturas, shaders, pos-processamento |
-| `aicoders-engine/physics` | CollisionWorld, RigidBody, CharacterController, WaterVolume |
+| `aicoders-engine/physics` | CollisionWorld, RigidBody, CharacterController, WaterVolume, CellularFluid |
 | `aicoders-engine/geometry` | primitivas e texturas procedurais |
 | `aicoders-engine/spatial` | DynamicBVH, TriangleBVH |
 | `aicoders-engine/animation` | AnimationMixer, clips, tracks |
@@ -571,6 +571,51 @@ escolhe diretamente a linha d'agua (o padrao 1.35 deixa cabeca e ombros de fora)
 
 Verificado em `tools/physics-test.mjs`: densidades 0.25 / 0.5 / 0.8 estabilizam em 0.250 / 0.500 /
 0.800 de submersao.
+
+### Agua que escoa
+
+`WaterVolume` modela um corpo de agua *fixo* agindo sobre corpos rigidos. `CellularFluid` modela a
+agua como aquilo que **se move**: enche buracos, transborda beiradas e seca quando a fonte some. Um
+jogo voxel precisa dos dois — um para boiar um barco, o outro para responder "cavei do lado do lago,
+e agora?".
+
+O solver nao tem armazenamento proprio. Ele fala com a sua grade por acessores, o que o torna
+independente de como voce guarda o mundo e permite que voce aplique os proprios efeitos colaterais
+(remesh, reiluminar) dentro do `setLevel`:
+
+```js
+import { CellularFluid } from './src/index.js';
+
+const fluido = new CellularFluid({
+  getLevel: (x, y, z) => grade.nivel(x, y, z),
+  setLevel: (x, y, z, n) => { grade.setNivel(x, y, z, n); marcarParaRedesenhar(x, y, z); },
+  isSolid:  (x, y, z) => grade.bloqueia(x, y, z),
+  isSource: (x, y, z) => grade.eNascente(x, y, z),
+});
+
+fluido.markDirty(x, y, z);  // o jogador cavou aqui
+fluido.update(dt);          // no loop de frame
+```
+
+O nivel de uma celula nao e integrado a partir de vazoes: e **derivado** dos vizinhos, o que faz do
+estado de repouso um campo de distancia BFS medido a partir das fontes. Isso sempre converge (sem
+oscilacao para amortecer, sem condicao de CFL) e, o que importa mais, **seca certo**: apague a fonte
+e a mesma regra drena a poca, porque nenhuma celula sustenta um nivel que os vizinhos nao
+justifiquem.
+
+Duas regras evitam que o resultado pareca difusao em vez de agua:
+
+- **quem tem para onde cair nao espalha para os lados** — um derramamento despeja no buraco ao lado
+  em vez de crescer como um disco uniforme, e so volta a espalhar quando o buraco enche;
+- **agua de passagem tambem nao alimenta os lados** — sem isso uma cachoeira vira cortina, porque
+  uma coluna em queda livre fica cheia em toda a altura e o teste ingenuo de "tem espaco embaixo"
+  passa a dizer que ela e uma pilha de pocas.
+
+`flowAt(x, y, z, out)` da a direcao da correnteza pelo gradiente de nivel, para empurrar quem
+estiver dentro dela.
+
+Verificado em `tools/fluid-test.mjs` (43 asserções sobre o solver) e `tools/voxel-fluid-test.mjs`
+(33 sobre a integracao no jogo voxel, incluindo o caso de cavar ao lado do oceano gerado).
 
 ### Input
 

@@ -35,6 +35,11 @@ const GROUND_ACCEL = 14.0;
 const AIR_ACCEL = 3.2;
 const FLY_ACCEL = 12.0;
 const SWIM_ACCEL = 6.0;
+/**
+ * Acceleration the current imparts, m/s^2. Kept well under `SWIM_SPEED` worth of
+ * thrust so a swimmer can still make headway upstream.
+ */
+const CURRENT_PUSH = 4.5;
 
 const PITCH_LIMIT = Math.PI * 0.5 - 0.001;
 
@@ -249,6 +254,20 @@ export class Player {
     if (jumpDown) this.vy += 22.0 * dt;
     this.vy *= Math.pow(0.06, dt);
     this.fallDistance = 0;
+
+    // The current carries you. Applied as acceleration rather than as a
+    // velocity floor so swimming against it works, just slowly — which is what
+    // makes a river read as a river instead of as a conveyor belt.
+    const flow = this.world.fluid.flowAt(
+      Math.floor(this.body.x),
+      Math.floor(this.body.y),
+      Math.floor(this.body.z),
+    );
+    if (flow.x !== 0 || flow.y !== 0 || flow.z !== 0) {
+      this.vx += flow.x * CURRENT_PUSH * dt;
+      this.vy += flow.y * CURRENT_PUSH * dt;
+      this.vz += flow.z * CURRENT_PUSH * dt;
+    }
   }
 
   /** @private */

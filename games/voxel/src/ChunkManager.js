@@ -26,6 +26,8 @@ class PadPool {
     this.blocks = [];
     /** @type {Uint8Array[]} */
     this.light = [];
+    /** @type {Uint8Array[]} */
+    this.fluid = [];
   }
 
   acquireBlocks() {
@@ -36,10 +38,15 @@ class PadPool {
     return this.light.pop() || new Uint8Array(PAD_VOLUME);
   }
 
-  release(blocks, light) {
+  acquireFluid() {
+    return this.fluid.pop() || new Uint8Array(PAD_VOLUME);
+  }
+
+  release(blocks, light, fluid) {
     // Buffers come back detached if the worker kept them; length 0 is the tell.
     if (blocks && blocks.length === PAD_VOLUME && this.blocks.length < 32) this.blocks.push(blocks);
     if (light && light.length === PAD_VOLUME && this.light.length < 32) this.light.push(light);
+    if (fluid && fluid.length === PAD_VOLUME && this.fluid.length < 32) this.fluid.push(fluid);
   }
 }
 
@@ -121,6 +128,8 @@ export class ChunkManager {
       pendingUpload: 0,
       trianglesResident: 0,
       lightQueue: 0,
+      fluidQueue: 0,
+      fluidChanged: 0,
     };
 
     /** @type {string|null} */
@@ -168,7 +177,7 @@ export class ChunkManager {
     }
 
     if (msg.type === 'meshed') {
-      this.pads.release(msg.recycleBlocks, msg.recycleLight);
+      this.pads.release(msg.recycleBlocks, msg.recycleLight, msg.recycleFluid);
       if (job !== undefined && job.cancelled === true) return;
       // The chunk may have been unloaded while the worker was busy.
       const chunk = this.world.getChunk(msg.cx, msg.cz);
@@ -199,8 +208,9 @@ export class ChunkManager {
    *
    * @param {number} viewerX World position of the viewer.
    * @param {number} viewerZ
+   * @param {number} [dt=0] Seconds since the last frame, for the fluid clock.
    */
-  update(viewerX, viewerZ) {
+  update(viewerX, viewerZ, dt = 0) {
     const cx = Math.floor(viewerX) >> 4;
     const cz = Math.floor(viewerZ) >> 4;
 
@@ -213,6 +223,9 @@ export class ChunkManager {
 
     this._dispatchGeneration();
     this.world.lighting.update();
+    // Water runs before meshing so a cell that moved this frame is remeshed in
+    // the same frame, instead of showing its previous level for one more.
+    this.world.fluid.update(dt);
     this._dispatchMeshing();
     this._processUploads();
     this._updateStats();
@@ -308,8 +321,10 @@ export class ChunkManager {
       const padded = this.world.buildPadded(chunk, item.section);
       const blocks = this.pads.acquireBlocks();
       const light = this.pads.acquireLight();
+      const fluid = this.pads.acquireFluid();
       blocks.set(padded.blocks);
       light.set(padded.light);
+      fluid.set(padded.fluid);
 
       const id = this._nextJobId++;
       this.jobs.set(id, { kind: 'mesh', cx: item.cx, cz: item.cz, section: item.section, cancelled: false });
@@ -318,8 +333,8 @@ export class ChunkManager {
       dirty.delete(item.key);
 
       this._send(
-        { type: 'mesh', id, cx: item.cx, cz: item.cz, section: item.section, blocks, light },
-        [blocks.buffer, light.buffer],
+        { type: 'mesh', id, cx: item.cx, cz: item.cz, section: item.section, blocks, light, fluid },
+        [blocks.buffer, light.buffer, fluid.buffer],
       );
       inFlight++;
     }
@@ -473,6 +488,8 @@ export class ChunkManager {
     s.pendingGenerate = this.generateQueue.length;
     s.pendingUpload = this.uploadQueue.length;
     s.lightQueue = this.world.lighting.queueLength;
+    s.fluidQueue = this.world.fluid.queueLength;
+    s.fluidChanged = this.world.fluid.lastChanged;
 
     let generating = 0;
     let meshing = 0;

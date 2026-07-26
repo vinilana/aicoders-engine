@@ -30,12 +30,12 @@ self.onmessage = (event) => {
     }
 
     case 'mesh': {
-      const { opaque, water } = meshSection(msg.blocks, msg.light);
+      const { opaque, water } = meshSection(msg.blocks, msg.light, msg.fluid);
 
       // Collect every produced buffer for transfer. Handing the scratch input
       // buffers back too lets the main thread recycle them instead of
       // allocating a fresh pair per section.
-      const transfer = [msg.blocks.buffer, msg.light.buffer];
+      const transfer = [msg.blocks.buffer, msg.light.buffer, msg.fluid.buffer];
       if (opaque !== null) {
         transfer.push(
           opaque.positions.buffer, opaque.normals.buffer,
@@ -59,6 +59,7 @@ self.onmessage = (event) => {
         water,
         recycleBlocks: msg.blocks,
         recycleLight: msg.light,
+        recycleFluid: msg.fluid,
       }, transfer);
       break;
     }

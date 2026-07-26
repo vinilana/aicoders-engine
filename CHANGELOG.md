@@ -3,6 +3,72 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento conforme [SemVer](https://semver.org/lang/pt-BR/).
 
+## [1.2.0] — 2026-07-25
+
+Fluido em grade. Saiu do exemplo voxel, mas a regra inteira mora na engine e nao
+sabe o que e' um chunk.
+
+### Adicionado
+
+- **`CellularFluid`**: liquido que escoa sobre uma grade discreta — enche
+  buracos, transborda beiradas, desce ladeira e **seca quando a fonte some**.
+
+  E' a outra metade do `WaterVolume`. Aquele modela um corpo de agua *fixo*
+  agindo sobre corpos rigidos (empuxo, arrasto, correnteza) e nunca muda de
+  forma. Este modela a agua como aquilo que se move. Um jogo voxel precisa dos
+  dois: um para boiar um barco, este para responder "cavei do lado do lago, e
+  agora?".
+
+  O solver nao tem armazenamento proprio: le e escreve celulas pelos acessores
+  passados na construcao (`getLevel`, `setLevel`, `isSolid`, `isSource`,
+  `isLoaded`). E' o que o mantem independente de como o hospedeiro guarda o
+  mundo — colunas de chunk, array plano, mapa de tiles — e o que permite ao
+  hospedeiro aplicar os proprios efeitos colaterais (remesh, reiluminar, marcar
+  para salvar) dentro do `setLevel`.
+
+  O nivel de uma celula nao e' integrado a partir de vazoes: e' **derivado** dos
+  vizinhos. Isso torna o estado de repouso um campo de distancia BFS medido a
+  partir das fontes, o que importa por dois motivos. **Sempre converge** — nao ha
+  oscilacao para amortecer nem condicao de CFL a respeitar — e **seca certo**:
+  apague a fonte e a mesma regra drena a poca, porque nenhuma celula consegue
+  sustentar um nivel que os vizinhos nao justifiquem.
+
+  Massa nao e' conservada, de proposito. Um solver conservativo numa grade
+  grosseira da' pocas que nunca somem e margens que tremem; uma fonte que
+  espalha uma distancia limitada e para e' o que o jogador espera e o que se
+  mantem estavel quando editam o mundo por baixo dela.
+
+  Duas regras fazem o resultado parecer deliberado em vez de difuso:
+
+  - **quem tem para onde cair nao espalha para os lados.** Agua que chega na
+    borda de um buraco despeja nele em vez de continuar rastejando pelo chao, e
+    so' volta a espalhar depois que o buraco encheu. Sem isso um derramamento
+    cresce como um disco uniforme e ignora o buraco ao lado, o que le como
+    obviamente falso;
+  - **agua de passagem tambem nao alimenta os lados.** Uma coluna em queda livre
+    fica cheia em toda a altura, entao o teste ingenuo de "tem espaco embaixo"
+    vira falso assim que a queda atinge o chao e cada nivel da coluna passa a se
+    comportar como poca — a cachoeira virava uma cortina. O que decide nao e' se
+    ha espaco embaixo, e sim se a agua de baixo **esta indo a algum lugar**.
+
+  Fluido corre no relogio proprio, nao no do frame: `update(dt)` acumula tempo e
+  roda um tick a cada `flowInterval`, avancando a frente exatamente uma celula.
+  Rodar por frame faria a agua saltar para a forma final em poucos frames,
+  perdendo o espalhamento — e o espalhamento *e'* o retorno que diz ao jogador
+  que o mundo reagiu.
+
+  `flowAt(x, y, z, out)` devolve a direcao da correnteza a partir do gradiente de
+  nivel, para empurrar quem estiver dentro dela.
+
+### Exemplo voxel
+
+- Agua corrente completa: cavar ao lado do lago enche o bloco, furar o leito
+  abre um ralo, tirar a fonte seca a poca, e a superficie e' desenhada na altura
+  do nivel (o mesher passou a receber o nivel, entao um riacho mostra o degrau de
+  cada celula). Correnteza empurra o jogador nadando. Balde na tecla 9.
+- Passou a usar `enterGameMode()`: com o ponteiro travado, Ctrl+W nao fecha mais
+  a aba no meio de uma escavacao.
+
 ## [1.1.0] — 2026-07-25
 
 Duas mudancas na engine que sairam da construcao do exemplo de kart. As duas
@@ -105,5 +171,6 @@ Primeira versao publicavel. A engine passa a ser consumivel como pacote.
   WSL2 com rede espelhada, onde um processo do Windows segura a porta sem
   aparecer no `ss`.
 
+[1.2.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.2.0
 [1.1.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/vinilana/aicoders-engine/releases/tag/v1.0.0

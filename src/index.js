@@ -22,7 +22,7 @@
  */
 
 /** Engine version string. */
-export const VERSION = '1.1.0';
+export const VERSION = '1.2.0';
 
 /* ========================================================================== *
  * MATH
@@ -346,6 +346,7 @@ export { CollisionWorld, StaticCollider, createSweepHit } from './physics/Collis
 export { CharacterController } from './physics/CharacterController.js';
 export { RigidBody, BodyType, BodyShape } from './physics/RigidBody.js';
 export { WaterVolume } from './physics/WaterVolume.js';
+export { CellularFluid } from './physics/CellularFluid.js';
 
 /* ========================================================================== *
  * INPUT

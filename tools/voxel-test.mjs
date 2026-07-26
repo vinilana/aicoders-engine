@@ -137,6 +137,50 @@ async function main() {
       let solidCount = 0;
       for (let y = 0; y < 128; y++) if (w.getBlock(bx, y, bz) !== 0) solidCount++;
 
+      // --- agua corrente: derrama um balde num terreno plano proximo e deixa
+      // a simulacao assentar. Testa o caminho inteiro no navegador de verdade:
+      // solver, sincronia entre nivel e bloco, remesh e transferencia do array
+      // de fluido para o worker.
+      const fx = bx + 3;
+      const fz = bz + 3;
+      const fy = w.surfaceY(fx, fz) + 1;
+      const fluidPlaced = fy > 0 && w.setBlock(fx, fy, fz, 16);
+      let fluidSpread = 0;
+      let fluidInvariant = 0;
+      let fluidDrained = -1;
+      let fluidRemeshed = 0;
+      if (fluidPlaced) {
+        w.dirtySections.clear();
+        w.fluid.settle(200);
+        // Escoar tem que sujar secao: e' o gancho que manda a agua para o
+        // worker de meshing e a faz aparecer na tela com a altura nova.
+        fluidRemeshed = w.dirtySections.size;
+        for (let dx = -8; dx <= 8; dx++) {
+          for (let dz = -8; dz <= 8; dz++) {
+            if (w.getFluidLevel(fx + dx, fy, fz + dz) > 0) fluidSpread++;
+          }
+        }
+        // Nivel > 0 e bloco de agua tem que andar sempre juntos.
+        for (let dx = -8; dx <= 8; dx++) {
+          for (let dz = -8; dz <= 8; dz++) {
+            for (let dy = -3; dy <= 1; dy++) {
+              const wet = w.getFluidLevel(fx + dx, fy + dy, fz + dz) > 0;
+              const isWater = w.getBlock(fx + dx, fy + dy, fz + dz) === 16;
+              if (wet !== isWater) fluidInvariant++;
+            }
+          }
+        }
+        // Tirar a fonte tem que secar tudo.
+        w.setBlock(fx, fy, fz, 0);
+        w.fluid.settle(400);
+        fluidDrained = 0;
+        for (let dx = -8; dx <= 8; dx++) {
+          for (let dz = -8; dz <= 8; dz++) {
+            if (w.getFluidLevel(fx + dx, fy, fz + dz) > 0) fluidDrained++;
+          }
+        }
+      }
+
       // --- luz: o ceu deve estar iluminado acima da superficie
       const surface = w.surfaceY(bx, bz);
       const skyAbove = w.getSkyLight(bx, surface + 2, bz);
@@ -159,6 +203,7 @@ async function main() {
         brokeOk, afterBreak, placedOk, afterPlace, original,
         raycastHit: before,
         lightQueue: g.chunks.stats.lightQueue,
+        fluidPlaced, fluidSpread, fluidInvariant, fluidDrained, fluidRemeshed,
         pendingGenerate: g.chunks.stats.pendingGenerate,
         fps: Math.round(g.engine.time.fps),
         error: g.chunks.lastError,
@@ -246,6 +291,14 @@ async function main() {
       ['coluna tem terreno', report.solidCount > 10],
       ['skylight na superficie', report.skyAbove === 15],
       ['skylight bloqueado no fundo', report.skyDeep < 15],
+      ['balde de agua se espalha', report.fluidPlaced === true && report.fluidSpread > 4,
+        report.fluidSpread + ' celulas molhadas'],
+      ['nivel e bloco nunca divergem', report.fluidInvariant === 0,
+        report.fluidInvariant + ' divergencias'],
+      ['escoar marca secao para remesh', report.fluidRemeshed > 0,
+        report.fluidRemeshed + ' secoes sujas'],
+      ['sem a fonte a agua seca', report.fluidDrained === 0,
+        report.fluidDrained + ' celulas restantes'],
       ['edicao de bloco funciona', report.brokeOk === true && report.afterBreak === 0 &&
         report.placedOk === true && report.afterPlace === report.original],
       ['jogador assentou no solo', report.suspended === false],

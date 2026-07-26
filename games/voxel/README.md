@@ -21,6 +21,7 @@ Parâmetros de URL: `?seed=1337` (número ou texto) e `?distance=8` (raio em chu
 | Armazenamento | `src/Chunk.js` | Coluna 16×128×16 em `Uint16Array`, dividida em 8 seções de 16³ |
 | Geração | `src/WorldGen.js` | Perlin 3D/2D, 7 biomas, cavernas por ruído ridged, veios de minério, árvores |
 | Iluminação | `src/Lighting.js` | Flood fill BFS de skylight e blocklight, com remoção correta e orçamento por frame |
+| Água corrente | `src/VoxelFluid.js` | Adaptador do `CellularFluid` da engine: nível por célula, escoamento, secagem e correnteza |
 | Meshing | `src/Mesher.js` | Greedy meshing com AO por vértice e luz suave por canto |
 | Mundo | `src/World.js` | Mapa esparso de chunks, acesso global, vizinhança padded 18³ |
 | Streaming | `src/ChunkManager.js` | Pool de workers, carga por distância, upload limitado por frame |
@@ -30,6 +31,34 @@ Parâmetros de URL: `?seed=1337` (número ou texto) e `?distance=8` (raio em chu
 | Física | `src/VoxelPhysics.js` | AABB varrida por eixo, com step-up automático |
 | Jogador | `src/Player.js` | Caminhar, nadar, voar; colisão e câmera em primeira pessoa |
 | Interação | `src/Interaction.js` | Quebrar e colocar blocos, com destaque do alvo |
+
+---
+
+## Água corrente
+
+Cavar ao lado de um lago enche o bloco cavado. Furar o leito faz a água descer
+pelo buraco, enchê-lo até a borda e só então seguir adiante. Tirar a fonte seca
+a poça inteira. Nadar rio abaixo é mais rápido do que rio acima.
+
+Nada disso mora aqui: a regra toda está no `CellularFluid` da engine, que opera
+sobre uma grade abstrata e não sabe o que é um chunk. O que este jogo fornece são
+os quatro acessores (`getLevel`, `setLevel`, `isSolid`, `isSource`) e a tradução
+entre nível e id de bloco.
+
+**Água gerada é fonte; água que escorreu não é.** Essa única distinção é o que
+faz um oceano se sustentar sem custo nenhum em repouso (fontes nunca mudam, então
+nunca entram na fila) e ao mesmo tempo faz uma poça derramada secar quando o
+balde é recolhido.
+
+O nível vive num `Uint8Array` paralelo ao de blocos, não no id. Codificar oito
+níveis como oito ids de água multiplicaria a tabela de blocos — e todas as
+tabelas indexadas por id junto — por causa de um único atributo de um único
+bloco.
+
+Na hotbar, a tecla **9** é o balde: coloca uma fonte, e colocar de novo sobre uma
+fonte existente a recolhe. O raycast atravessa líquidos de propósito (você
+precisa poder cavar o bloco atrás de uma cachoeira), então mirar na própria água
+é impossível — sem o recolhimento, água colocada à mão seria permanente.
 
 ---
 
